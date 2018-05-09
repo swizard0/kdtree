@@ -1,0 +1,7 @@
+[package]
+name = "kdtree"
+version = "0.1.0"
+description = "K-dimensional tree space-partitioning data structure"
+authors = ["Alexey Voznyuk <me@swizard.info>"]
+
+[dependencies]

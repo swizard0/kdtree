@@ -56,6 +56,20 @@ impl<A, P, B, S> KdvTree<A, P, B, S>
             axis, shapes,
         }
     }
+
+    pub fn intersects<'t, 's, SN>(&'t self, shape: &'s SN) -> IntersectIter<'t, 's, A, P, S, B, SN, SN::BoundingBox>
+        where SN: Shape<BoundingBox = S::BoundingBox>
+    {
+        IntersectIter {
+            needle: shape,
+            axis: &self.axis,
+            shapes: &self.shapes,
+            queue: vec![TraverseTask::Explore {
+                node: &self.root,
+                needle_fragment: shape.bounding_box(),
+            }],
+        }
+    }
 }
 
 struct ShapeFragment<B> {
@@ -179,6 +193,39 @@ fn shape_owner<A, P, B, S>(shape: &S, fragment: B, cut_axis: &A, cut_point: &P) 
         } else {
             ShapeOwner::Me(fragment)
         }
+    }
+}
+
+enum TraverseTask<'t, P: 't, BS: 't, BN> {
+    Explore { node: &'t KdvNode<P, BS>, needle_fragment: BN, },
+    Intersect { needle_fragment: BN, shape_fragment: &'t ShapeFragment<BS>, axis_counter: usize, },
+}
+
+pub struct IntersectIter<'t, 's, A: 't, P: 't, SS: 't, BS: 't, SN: 's, BN> {
+    needle: &'s SN,
+    axis: &'t [A],
+    shapes: &'t [SS],
+    queue: Vec<TraverseTask<'t, P, BS, BN>>,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct Intersection<'t, SS: 't, BS: 't, BN> {
+    pub shape: &'t SS,
+    pub shape_fragment: &'t BS,
+    pub needle_fragment: BN,
+}
+
+impl<'t, 's, A, P, SS, BS, SN, BN> Iterator for IntersectIter<'t, 's, A, P, SS, BS, SN, BN>
+    where A: Axis<P>,
+          SS: Shape<BoundingBox = BS>,
+          BS: BoundingBox<Point = P>,
+          SN: Shape<BoundingBox = BN>,
+          BN: BoundingBox<Point = BS::Point>,
+{
+    type Item = Intersection<'t, SS, BS, BN>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        unimplemented!()
     }
 }
 

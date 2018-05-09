@@ -220,12 +220,116 @@ impl<'t, 's, A, P, SS, BS, SN, BN> Iterator for IntersectIter<'t, 's, A, P, SS, 
           SS: Shape<BoundingBox = BS>,
           BS: BoundingBox<Point = P>,
           SN: Shape<BoundingBox = BN>,
-          BN: BoundingBox<Point = BS::Point>,
+          BN: BoundingBox<Point = BS::Point> + Clone,
 {
     type Item = Intersection<'t, SS, BS, BN>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        unimplemented!()
+        'outer: while let Some(task) = self.queue.pop() {
+            match task {
+                TraverseTask::Explore { node, needle_fragment, } => {
+                    match node.children {
+                        KdvNodeChildren::Missing =>
+                            (),
+                        KdvNodeChildren::OnlyLeft { ref cut_point, ref child, } => {
+                            let cut_axis = &self.axis[cut_point.axis_index];
+                            match shape_owner(self.needle, needle_fragment.clone(), cut_axis, &cut_point.point) {
+                                ShapeOwner::Me(needle_fragment) =>
+                                    self.queue.push(TraverseTask::Explore { node: child, needle_fragment, }),
+                                ShapeOwner::Left(needle_fragment) =>
+                                    self.queue.push(TraverseTask::Explore { node: child, needle_fragment, }),
+                                ShapeOwner::Right(..) =>
+                                    (),
+                                ShapeOwner::Both { left_bbox: needle_fragment, .. } =>
+                                    self.queue.push(TraverseTask::Explore { node: child, needle_fragment, }),
+                            }
+                        },
+                        KdvNodeChildren::OnlyRight { ref cut_point, ref child, } => {
+                            let cut_axis = &self.axis[cut_point.axis_index];
+                            match shape_owner(self.needle, needle_fragment.clone(), cut_axis, &cut_point.point) {
+                                ShapeOwner::Me(needle_fragment) =>
+                                    self.queue.push(TraverseTask::Explore { node: child, needle_fragment, }),
+                                ShapeOwner::Left(..) =>
+                                    (),
+                                ShapeOwner::Right(needle_fragment) =>
+                                    self.queue.push(TraverseTask::Explore { node: child, needle_fragment, }),
+                                ShapeOwner::Both { right_bbox: needle_fragment, .. } =>
+                                    self.queue.push(TraverseTask::Explore { node: child, needle_fragment, }),
+                            }
+                        },
+                        KdvNodeChildren::Both { ref cut_point, ref left, ref right, } => {
+                            let cut_axis = &self.axis[cut_point.axis_index];
+                            match shape_owner(self.needle, needle_fragment.clone(), cut_axis, &cut_point.point) {
+                                ShapeOwner::Me(fragment) => {
+                                    self.queue.push(TraverseTask::Explore { node: left, needle_fragment: fragment.clone(), });
+                                    self.queue.push(TraverseTask::Explore { node: right, needle_fragment: fragment, });
+                                },
+                                ShapeOwner::Left(needle_fragment) =>
+                                    self.queue.push(TraverseTask::Explore { node: left, needle_fragment, }),
+                                ShapeOwner::Right(needle_fragment) =>
+                                    self.queue.push(TraverseTask::Explore { node: right, needle_fragment, }),
+                                ShapeOwner::Both { left_bbox, right_bbox, } => {
+                                    self.queue.push(TraverseTask::Explore { node: left, needle_fragment: left_bbox, });
+                                    self.queue.push(TraverseTask::Explore { node: right, needle_fragment: right_bbox, });
+                               },
+                            }
+                        },
+                    }
+                    for shape_fragment in node.shapes.iter() {
+                        self.queue.push(TraverseTask::Intersect {
+                            shape_fragment,
+                            needle_fragment: needle_fragment.clone(),
+                            axis_counter: 0,
+                        });
+                    }
+                },
+                TraverseTask::Intersect { shape_fragment, needle_fragment, mut axis_counter, } => {
+                    let no_intersection = self.axis.iter().any(|axis| {
+                        let needle_min = needle_fragment.min_corner();
+                        let needle_max = needle_fragment.max_corner();
+                        let shape_min = shape_fragment.bounding_box.min_corner();
+                        let shape_max = shape_fragment.bounding_box.max_corner();
+                        match (axis.cmp_points(&needle_min, &shape_max), axis.cmp_points(&needle_max, &shape_min)) {
+                            (Ordering::Greater, Ordering::Less) => true,
+                            _ => false,
+                        }
+                    });
+                    if no_intersection {
+                        continue;
+                    }
+                    let axis_total = self.axis.len();
+                    for _ in 0 .. axis_total {
+                        let cut_axis = &self.axis[axis_counter % axis_total];
+                        let maybe_cut_point = cut_axis.cut_point(
+                            iter::once(needle_fragment.min_corner())
+                                .chain(iter::once(needle_fragment.max_corner()))
+                        );
+                        if let Some(cut_point) = maybe_cut_point {
+                            if let Some((left_fragment, right_fragment)) = self.needle.cut(&needle_fragment, cut_axis, &cut_point) {
+                                self.queue.push(TraverseTask::Intersect {
+                                    shape_fragment: shape_fragment.clone(),
+                                    needle_fragment: left_fragment,
+                                    axis_counter,
+                                });
+                                self.queue.push(TraverseTask::Intersect {
+                                    shape_fragment: shape_fragment,
+                                    needle_fragment: right_fragment,
+                                    axis_counter,
+                                });
+                                continue 'outer;
+                            }
+                        }
+                        axis_counter += 1;
+                    }
+                    return Some(Intersection {
+                        shape: &self.shapes[shape_fragment.shape_id],
+                        shape_fragment: &shape_fragment.bounding_box,
+                        needle_fragment,
+                    });
+                },
+            }
+        }
+        None
     }
 }
 

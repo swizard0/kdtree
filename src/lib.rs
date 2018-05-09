@@ -13,17 +13,16 @@ pub trait BoundingBox {
     fn max_corner(&self) -> Self::Point;
 }
 
-pub trait Shape {
+pub trait Shape<A> {
     type BoundingBox: BoundingBox;
 
     fn bounding_box(&self) -> Self::BoundingBox;
-    fn cut<A>(
+    fn cut(
         &self,
         fragment: &Self::BoundingBox,
         cut_axis: &A,
         cut_point: &<Self::BoundingBox as BoundingBox>::Point
-    ) -> Option<(Self::BoundingBox, Self::BoundingBox)>
-        where A: Axis<<Self::BoundingBox as BoundingBox>::Point>;
+    ) -> Option<(Self::BoundingBox, Self::BoundingBox)>;
 }
 
 pub struct KdvTree<A, P, B, S> {
@@ -35,7 +34,7 @@ pub struct KdvTree<A, P, B, S> {
 impl<A, P, B, S> KdvTree<A, P, B, S>
     where A: Axis<P>,
           B: BoundingBox<Point = P>,
-          S: Shape<BoundingBox = B>,
+          S: Shape<A, BoundingBox = B>,
 {
     pub fn build<IA, II>(axis_it: IA, shapes_it: II) -> KdvTree<A, P, B, S>
         where IA: IntoIterator<Item = A>,
@@ -58,7 +57,7 @@ impl<A, P, B, S> KdvTree<A, P, B, S>
     }
 
     pub fn intersects<'t, 's, SN>(&'t self, shape: &'s SN) -> IntersectIter<'t, 's, A, P, S, B, SN, SN::BoundingBox>
-        where SN: Shape<BoundingBox = S::BoundingBox>
+        where SN: Shape<A, BoundingBox = S::BoundingBox>
     {
         IntersectIter {
             needle: shape,
@@ -96,7 +95,7 @@ enum KdvNodeChildren<P, B> {
 
 impl<P, B> KdvNode<P, B> {
     fn build<A, S>(depth: usize, axis: &[A], shapes: &[S], mut node_shapes: Vec<ShapeFragment<B>>) -> KdvNode<P, B>
-        where S: Shape<BoundingBox = B>,
+        where S: Shape<A, BoundingBox = B>,
               B: BoundingBox<Point = P>,
               A: Axis<P>,
     {
@@ -179,7 +178,7 @@ enum ShapeOwner<B> {
 fn shape_owner<A, P, B, S>(shape: &S, fragment: B, cut_axis: &A, cut_point: &P) -> ShapeOwner<B>
     where A: Axis<P>,
           B: BoundingBox<Point = P>,
-          S: Shape<BoundingBox = B>,
+          S: Shape<A, BoundingBox = B>,
 {
     let min_corner = fragment.min_corner();
     let max_corner = fragment.max_corner();
@@ -217,9 +216,9 @@ pub struct Intersection<'t, SS: 't, BS: 't, BN> {
 
 impl<'t, 's, A, P, SS, BS, SN, BN> Iterator for IntersectIter<'t, 's, A, P, SS, BS, SN, BN>
     where A: Axis<P>,
-          SS: Shape<BoundingBox = BS>,
+          SS: Shape<A, BoundingBox = BS>,
           BS: BoundingBox<Point = P>,
-          SN: Shape<BoundingBox = BN>,
+          SN: Shape<A, BoundingBox = BN>,
           BN: BoundingBox<Point = BS::Point> + Clone,
 {
     type Item = Intersection<'t, SS, BS, BN>;
@@ -335,8 +334,96 @@ impl<'t, 's, A, P, SS, BS, SN, BN> Iterator for IntersectIter<'t, 's, A, P, SS, 
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
+    use std::cmp::{min, max, Ordering};
+    use super::{KdvTree, Intersection};
+
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    struct Point2d { x: i32, y: i32, }
+
+    #[derive(Clone, Debug)]
+    enum Axis { X, Y, }
+
+    impl super::Axis<Point2d> for Axis {
+        fn cut_point<I>(&self, points: I) -> Option<Point2d> where I: Iterator<Item = Point2d> {
+            let mut total = 0;
+            let mut sum = 0;
+            for p in points {
+                sum += match self {
+                    &Axis::X => p.x,
+                    &Axis::Y => p.y,
+                };
+                total += 1;
+            }
+            if total == 0 {
+                None
+            } else {
+                let mid = sum / total;
+                Some(match self {
+                    &Axis::X => Point2d { x: mid, y: 0, },
+                    &Axis::Y => Point2d { x: 0, y: mid, },
+                })
+            }
+        }
+
+        fn cmp_points(&self, a: &Point2d, b: &Point2d) -> Ordering {
+            match self {
+                &Axis::X => a.x.cmp(&b.x),
+                &Axis::Y => a.y.cmp(&b.y),
+            }
+        }
+    }
+
+    #[derive(PartialEq, Clone, Debug)]
+    struct Rect2d { lt: Point2d, rb: Point2d, }
+
+    impl super::BoundingBox for Rect2d {
+        type Point = Point2d;
+
+        fn min_corner(&self) -> Self::Point { self.lt }
+        fn max_corner(&self) -> Self::Point { self.rb }
+    }
+
+    #[derive(PartialEq, Debug)]
+    struct Line2d { src: Point2d, dst: Point2d, }
+
+    impl super::Shape<Axis> for Line2d {
+        type BoundingBox = Rect2d;
+
+        fn bounding_box(&self) -> Self::BoundingBox {
+            Rect2d {
+                lt: Point2d { x: min(self.src.x, self.dst.x), y: min(self.src.y, self.dst.y), },
+                rb: Point2d { x: max(self.src.x, self.dst.x), y: max(self.src.y, self.dst.y), },
+            }
+        }
+
+        fn cut(
+            &self,
+            fragment: &Self::BoundingBox,
+            cut_axis: &Axis,
+            cut_point: &<Self::BoundingBox as super::BoundingBox>::Point
+        )
+            -> Option<(Self::BoundingBox, Self::BoundingBox)>
+        {
+            let bbox = self.bounding_box();
+            let (side, x, y) = match cut_axis {
+                &Axis::X => if cut_point.x >= fragment.lt.x && cut_point.x <= fragment.rb.x {
+                    let factor = (cut_point.x - bbox.lt.x) as f64 / (bbox.rb.x - bbox.lt.x) as f64;
+                    (fragment.rb.x - fragment.lt.x, cut_point.x, bbox.lt.y + (factor * (bbox.rb.y - bbox.lt.y) as f64) as i32)
+                } else {
+                    return None;
+                },
+                &Axis::Y => if cut_point.y >= fragment.lt.y && cut_point.y <= fragment.rb.y {
+                    let factor = (cut_point.y - bbox.lt.y) as f64 / (bbox.rb.y - bbox.lt.y) as f64;
+                    (fragment.rb.y - fragment.lt.y, bbox.lt.x + (factor * (bbox.rb.x - bbox.lt.x) as f64) as i32, cut_point.y)
+                } else {
+                    return None;
+                },
+            };
+            if side < 10 {
+                None
+            } else {
+                Some((Rect2d { lt: fragment.lt, rb: Point2d { x, y, } }, Rect2d { lt: Point2d { x, y, }, rb: fragment.rb, }))
+            }
+        }
     }
 }

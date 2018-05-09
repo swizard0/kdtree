@@ -288,10 +288,8 @@ impl<'t, 's, A, P, SS, BS, SN, BN> Iterator for IntersectIter<'t, 's, A, P, SS, 
                         let needle_max = needle_fragment.max_corner();
                         let shape_min = shape_fragment.bounding_box.min_corner();
                         let shape_max = shape_fragment.bounding_box.max_corner();
-                        match (axis.cmp_points(&needle_min, &shape_max), axis.cmp_points(&needle_max, &shape_min)) {
-                            (Ordering::Greater, Ordering::Less) => true,
-                            _ => false,
-                        }
+                        (axis.cmp_points(&needle_min, &shape_max) == Ordering::Greater ||
+                         axis.cmp_points(&needle_max, &shape_min) == Ordering::Less)
                     });
                     if no_intersection {
                         continue;
@@ -334,7 +332,7 @@ impl<'t, 's, A, P, SS, BS, SN, BN> Iterator for IntersectIter<'t, 's, A, P, SS, 
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::{min, max, Ordering};
+    use std::{iter, cmp::{min, max, Ordering}};
     use super::{KdvTree, Intersection};
 
     #[derive(Clone, Copy, PartialEq, Debug)]
@@ -425,5 +423,66 @@ mod tests {
                 Some((Rect2d { lt: fragment.lt, rb: Point2d { x, y, } }, Rect2d { lt: Point2d { x, y, }, rb: fragment.rb, }))
             }
         }
+    }
+
+    #[test]
+    fn kdv_tree_basic() {
+        let shapes = vec![Line2d { src: Point2d { x: 16, y: 16, }, dst: Point2d { x: 80, y: 80, }, }];
+        let tree = KdvTree::build(iter::once(Axis::X).chain(iter::once(Axis::Y)), shapes);
+
+        assert_eq!(tree.intersects(&Line2d { src: Point2d { x: 116, y: 116, }, dst: Point2d { x: 180, y: 180, }, }).collect::<Vec<_>>(), vec![]);
+        assert_eq!(tree.intersects(&Line2d { src: Point2d { x: 32, y: 48, }, dst: Point2d { x: 48, y: 64, }, }).collect::<Vec<_>>(), vec![]);
+        assert_eq!(tree.intersects(&Line2d { src: Point2d { x: 48, y: 32, }, dst: Point2d { x: 64, y: 48, }, }).collect::<Vec<_>>(), vec![]);
+
+        let intersects: Vec<_> = tree
+            .intersects(&Line2d { src: Point2d { x: 16, y: 64, }, dst: Point2d { x: 80, y: 64, }, })
+            .collect();
+        assert_eq!(intersects, vec![
+            Intersection {
+                shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+                shape_fragment: &Rect2d { lt: Point2d { x: 64, y: 64 }, rb: Point2d { x: 72, y: 72 } },
+                needle_fragment: Rect2d { lt: Point2d { x: 66, y: 64 }, rb: Point2d { x: 72, y: 64 } },
+            },
+            Intersection {
+                shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+                shape_fragment: &Rect2d { lt: Point2d { x: 64, y: 64 }, rb: Point2d { x: 72, y: 72 } },
+                needle_fragment: Rect2d { lt: Point2d { x: 60, y: 64 }, rb: Point2d { x: 66, y: 64 } },
+            },
+            Intersection {
+                shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+                shape_fragment: &Rect2d { lt: Point2d { x: 56, y: 56 }, rb: Point2d { x: 64, y: 64 } },
+                needle_fragment: Rect2d { lt: Point2d { x: 62, y: 64 }, rb: Point2d { x: 68, y: 64 } },
+            },
+            Intersection {
+                shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+                shape_fragment: &Rect2d { lt: Point2d { x: 56, y: 56 }, rb: Point2d { x: 64, y: 64 } },
+                needle_fragment: Rect2d { lt: Point2d { x: 56, y: 64 }, rb: Point2d { x: 62, y: 64 } },
+            },
+        ]);
+        let intersects: Vec<_> = tree
+            .intersects(&Line2d { src: Point2d { x: 64, y: 16, }, dst: Point2d { x: 64, y: 80, }, })
+            .collect();
+        assert_eq!(intersects, [
+            Intersection {
+                shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+                shape_fragment: &Rect2d { lt: Point2d { x: 64, y: 64 }, rb: Point2d { x: 72, y: 72 } },
+                needle_fragment: Rect2d { lt: Point2d { x: 64, y: 72 }, rb: Point2d { x: 64, y: 80 } },
+            },
+            Intersection {
+                shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+                shape_fragment: &Rect2d { lt: Point2d { x: 64, y: 64 }, rb: Point2d { x: 72, y: 72 } },
+                needle_fragment: Rect2d { lt: Point2d { x: 64, y: 64 }, rb: Point2d { x: 64, y: 72 } },
+            },
+            Intersection {
+                shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+                shape_fragment: &Rect2d { lt: Point2d { x: 56, y: 56 }, rb: Point2d { x: 64, y: 64 } },
+                needle_fragment: Rect2d { lt: Point2d { x: 64, y: 58 }, rb: Point2d { x: 64, y: 64 } },
+            },
+            Intersection {
+                shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+                shape_fragment: &Rect2d { lt: Point2d { x: 56, y: 56 }, rb: Point2d { x: 64, y: 64 } },
+                needle_fragment: Rect2d { lt: Point2d { x: 64, y: 52 }, rb: Point2d { x: 64, y: 58 } },
+            },
+        ]);
     }
 }

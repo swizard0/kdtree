@@ -408,23 +408,20 @@ mod tests {
             }
         }
 
-        fn cut_point<I>(&mut self, cut_axis: &Axis, points: I) -> Option<Point2d> where I: Iterator<Item = Point2d> {
+        fn cut_point<I>(&mut self, _cut_axis: &Axis, points: I) -> Option<Point2d> where I: Iterator<Item = Point2d> {
             let mut total = 0;
-            let mut sum = 0;
+            let mut point_sum = Point2d { x: 0, y: 0, };
             for p in points {
-                sum += match cut_axis {
-                    &Axis::X => p.x,
-                    &Axis::Y => p.y,
-                };
+                point_sum.x += p.x;
+                point_sum.y += p.y;
                 total += 1;
             }
             if total == 0 {
                 None
             } else {
-                let mid = sum / total;
-                Some(match cut_axis {
-                    &Axis::X => Point2d { x: mid, y: 0, },
-                    &Axis::Y => Point2d { x: 0, y: mid, },
+                Some(Point2d {
+                    x: (point_sum.x as f64 / total as f64) as i32,
+                    y: (point_sum.y as f64 / total as f64) as i32,
                 })
             }
         }
@@ -432,25 +429,73 @@ mod tests {
         fn cut(&mut self, shape: &Line2d, fragment: &Rect2d, cut_axis: &Axis, cut_point: &Point2d) ->
             Result<Option<(Rect2d, Rect2d)>, Self::Error>
         {
-            let bvol = self.bounding_volume(shape);
-            let (side, x, y) = match cut_axis {
+            match cut_axis {
                 &Axis::X => if cut_point.x >= fragment.lt.x && cut_point.x <= fragment.rb.x {
-                    let factor = (cut_point.x - bvol.lt.x) as f64 / (bvol.rb.x - bvol.lt.x) as f64;
-                    (fragment.rb.x - fragment.lt.x, cut_point.x, bvol.lt.y + (factor * (bvol.rb.y - bvol.lt.y) as f64) as i32)
+                    if fragment.rb.x - fragment.lt.x < 10 {
+                        Ok(None)
+                    } else {
+                        let factor = (cut_point.x - shape.src.x) as f64 / (shape.dst.x - shape.src.x) as f64;
+                        let y = shape.src.y as f64 + (factor * (shape.dst.y - shape.src.y) as f64);
+                        let left_point = if shape.src.x < shape.dst.x { shape.src } else { shape.dst };
+                        let left_bound = Rect2d {
+                            lt: Point2d {
+                                x: fragment.lt.x,
+                                y: if left_point.y < y as i32 { fragment.lt.y } else { y as i32 },
+                            },
+                            rb: Point2d {
+                                x: cut_point.x,
+                                y: if left_point.y < y as i32 { y as i32 } else { fragment.rb.y },
+                            }
+                        };
+                        let right_point = if shape.src.x < shape.dst.x { shape.dst } else { shape.src };
+                        let right_bound = Rect2d {
+                            lt: Point2d {
+                                x: cut_point.x,
+                                y: if right_point.y < y as i32 { fragment.lt.y } else { y as i32 },
+                            },
+                            rb: Point2d {
+                                x: fragment.rb.x,
+                                y: if right_point.y < y as i32 { y as i32 } else { fragment.rb.y },
+                            },
+                        };
+                        Ok(Some((left_bound, right_bound)))
+                    }
                 } else {
                     return Ok(None);
                 },
                 &Axis::Y => if cut_point.y >= fragment.lt.y && cut_point.y <= fragment.rb.y {
-                    let factor = (cut_point.y - bvol.lt.y) as f64 / (bvol.rb.y - bvol.lt.y) as f64;
-                    (fragment.rb.y - fragment.lt.y, bvol.lt.x + (factor * (bvol.rb.x - bvol.lt.x) as f64) as i32, cut_point.y)
+                    if fragment.rb.y - fragment.lt.y < 10 {
+                        Ok(None)
+                    } else {
+                        let factor = (cut_point.y - shape.src.y) as f64 / (shape.dst.y - shape.src.y) as f64;
+                        let x = shape.src.x as f64 + (factor * (shape.dst.x - shape.src.x) as f64);
+                        let upper_point = if shape.src.y < shape.dst.y { shape.src } else { shape.dst };
+                        let upper_bound = Rect2d {
+                            lt: Point2d {
+                                x: if upper_point.x < x as i32 { fragment.lt.x } else { x as i32 },
+                                y: fragment.lt.y,
+                            },
+                            rb: Point2d {
+                                x: if upper_point.x < x as i32 { x as i32 } else { fragment.rb.x },
+                                y: cut_point.y,
+                            }
+                        };
+                        let lower_point = if shape.src.y < shape.dst.y { shape.dst } else { shape.src };
+                        let lower_bound = Rect2d {
+                            lt: Point2d {
+                                x: if lower_point.x < x as i32 { fragment.lt.x } else { x as i32 },
+                                y: cut_point.y,
+                            },
+                            rb: Point2d {
+                                x: if lower_point.x < x as i32 { x as i32 } else { fragment.rb.x },
+                                y: fragment.rb.y,
+                            },
+                        };
+                        Ok(Some((upper_bound, lower_bound)))
+                    }
                 } else {
                     return Ok(None);
                 },
-            };
-            if side < 10 {
-                Ok(None)
-            } else {
-                Ok(Some((Rect2d { lt: fragment.lt, rb: Point2d { x, y, } }, Rect2d { lt: Point2d { x, y, }, rb: fragment.rb, })))
             }
         }
     }

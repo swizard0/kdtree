@@ -2,7 +2,6 @@ use std::iter;
 use std::cmp::Ordering;
 
 pub trait Axis<Point> {
-    fn cut_point<I>(&self, points: I) -> Option<Point> where I: Iterator<Item = Point>;
     fn cmp_points(&self, a: &Point, b: &Point) -> Ordering;
 }
 
@@ -18,6 +17,10 @@ pub trait VolumeManager<S, A> {
     type Error;
 
     fn bounding_volume(&self, shape: &S) -> Self::BoundingVolume;
+
+    fn cut_point<I>(&mut self, cut_axis: &A, points: I) ->
+        Option<<Self::BoundingVolume as BoundingVolume>::Point>
+        where I: Iterator<Item = <Self::BoundingVolume as BoundingVolume>::Point>;
 
     fn cut(
         &mut self,
@@ -108,14 +111,15 @@ impl<P, B> KdvNode<P, B> {
         // locate cut point for coords
         let cut_axis_index = depth % axis.len();
         let cut_axis = &axis[cut_axis_index];
-        let maybe_cut_point = cut_axis.cut_point(
+        let maybe_cut_point = manager.cut_point(
+            cut_axis,
             node_shapes
                 .iter()
                 .flat_map(|sf| {
                     let bvol = &sf.bounding_volume;
                     iter::once(bvol.min_corner())
                         .chain(iter::once(bvol.max_corner()))
-                })
+                }),
         );
 
         if let Some(cut_point) = maybe_cut_point {
@@ -316,9 +320,10 @@ impl<'t, 's, 'm, A, P, SS, BS, SN, BN, M> Iterator for IntersectIter<'t, 's, 'm,
                     let axis_total = self.axis.len();
                     for _ in 0 .. axis_total {
                         let cut_axis = &self.axis[axis_counter % axis_total];
-                        let maybe_cut_point = cut_axis.cut_point(
+                        let maybe_cut_point = self.manager.cut_point(
+                            cut_axis,
                             iter::once(needle_fragment.min_corner())
-                                .chain(iter::once(needle_fragment.max_corner()))
+                                .chain(iter::once(needle_fragment.max_corner())),
                         );
                         if let Some(cut_point) = maybe_cut_point {
                             match self.manager.cut(self.needle, &needle_fragment, cut_axis, &cut_point) {
@@ -369,27 +374,6 @@ mod tests {
     enum Axis { X, Y, }
 
     impl super::Axis<Point2d> for Axis {
-        fn cut_point<I>(&self, points: I) -> Option<Point2d> where I: Iterator<Item = Point2d> {
-            let mut total = 0;
-            let mut sum = 0;
-            for p in points {
-                sum += match self {
-                    &Axis::X => p.x,
-                    &Axis::Y => p.y,
-                };
-                total += 1;
-            }
-            if total == 0 {
-                None
-            } else {
-                let mid = sum / total;
-                Some(match self {
-                    &Axis::X => Point2d { x: mid, y: 0, },
-                    &Axis::Y => Point2d { x: 0, y: mid, },
-                })
-            }
-        }
-
         fn cmp_points(&self, a: &Point2d, b: &Point2d) -> Ordering {
             match self {
                 &Axis::X => a.x.cmp(&b.x),
@@ -421,6 +405,27 @@ mod tests {
             Rect2d {
                 lt: Point2d { x: min(shape.src.x, shape.dst.x), y: min(shape.src.y, shape.dst.y), },
                 rb: Point2d { x: max(shape.src.x, shape.dst.x), y: max(shape.src.y, shape.dst.y), },
+            }
+        }
+
+        fn cut_point<I>(&mut self, cut_axis: &Axis, points: I) -> Option<Point2d> where I: Iterator<Item = Point2d> {
+            let mut total = 0;
+            let mut sum = 0;
+            for p in points {
+                sum += match cut_axis {
+                    &Axis::X => p.x,
+                    &Axis::Y => p.y,
+                };
+                total += 1;
+            }
+            if total == 0 {
+                None
+            } else {
+                let mid = sum / total;
+                Some(match cut_axis {
+                    &Axis::X => Point2d { x: mid, y: 0, },
+                    &Axis::Y => Point2d { x: 0, y: mid, },
+                })
             }
         }
 

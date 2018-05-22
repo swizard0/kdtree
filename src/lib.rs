@@ -6,29 +6,26 @@ pub trait Axis<Point> {
     fn cmp_points(&self, a: &Point, b: &Point) -> Ordering;
 }
 
-pub trait BoundingBox {
+pub trait BoundingVolume {
     type Point;
 
     fn min_corner(&self) -> Self::Point;
     fn max_corner(&self) -> Self::Point;
 }
 
-pub trait Shape<A> {
-    type BoundingBox: BoundingBox;
-
-    fn bounding_box(&self) -> Self::BoundingBox;
-}
-
-pub trait Cutter<S, A> where S: Shape<A> {
+pub trait VolumeManager<S, A> {
+    type BoundingVolume: BoundingVolume;
     type Error;
+
+    fn bounding_volume(&self, shape: &S) -> Self::BoundingVolume;
 
     fn cut(
         &mut self,
         shape: &S,
-        fragment: &S::BoundingBox,
+        fragment: &Self::BoundingVolume,
         cut_axis: &A,
-        cut_point: &<S::BoundingBox as BoundingBox>::Point,
-    ) -> Result<Option<(S::BoundingBox, S::BoundingBox)>, Self::Error>;
+        cut_point: &<Self::BoundingVolume as BoundingVolume>::Point,
+    ) -> Result<Option<(Self::BoundingVolume, Self::BoundingVolume)>, Self::Error>;
 }
 
 pub struct KdvTree<A, P, B, S> {
@@ -39,13 +36,12 @@ pub struct KdvTree<A, P, B, S> {
 
 impl<A, P, B, S> KdvTree<A, P, B, S>
     where A: Axis<P>,
-          B: BoundingBox<Point = P>,
-          S: Shape<A, BoundingBox = B>,
+          B: BoundingVolume<Point = P>,
 {
-    pub fn build<IA, II, C>(axis_it: IA, shapes_it: II, cutter: &mut C) -> Result<KdvTree<A, P, B, S>, C::Error>
+    pub fn build<IA, II, M>(axis_it: IA, shapes_it: II, manager: &mut M) -> Result<KdvTree<A, P, B, S>, M::Error>
         where IA: IntoIterator<Item = A>,
               II: IntoIterator<Item = S>,
-              C: Cutter<S, A>,
+              M: VolumeManager<S, A, BoundingVolume = B>,
     {
         let axis: Vec<_> = axis_it.into_iter().collect();
         let shapes: Vec<_> = shapes_it.into_iter().collect();
@@ -53,20 +49,19 @@ impl<A, P, B, S> KdvTree<A, P, B, S>
             .iter()
             .enumerate()
             .map(|(i, s)| ShapeFragment {
-                bounding_box: s.bounding_box(),
+                bounding_volume: manager.bounding_volume(s),
                 shape_id: i,
             })
             .collect();
         Ok(KdvTree {
-            root: KdvNode::build(0, &axis, &shapes, root_shapes, cutter)?,
+            root: KdvNode::build(0, &axis, &shapes, root_shapes, manager)?,
             axis, shapes,
         })
     }
 
-    pub fn intersects<'t, 's, 'c, SN, C>(&'t self, shape: &'s SN, cutter: &'c mut C) ->
-        IntersectIter<'t, 's, 'c, A, P, S, B, SN, SN::BoundingBox, C>
-        where SN: Shape<A, BoundingBox = S::BoundingBox>,
-              C: Cutter<S, A>,
+    pub fn intersects<'t, 's, 'm, SN, M>(&'t self, shape: &'s SN, manager: &'m mut M) ->
+        IntersectIter<'t, 's, 'm, A, P, S, B, SN, M::BoundingVolume, M>
+        where M: VolumeManager<SN, A>,
     {
         IntersectIter {
             needle: shape,
@@ -74,15 +69,15 @@ impl<A, P, B, S> KdvTree<A, P, B, S>
             shapes: &self.shapes,
             queue: vec![TraverseTask::Explore {
                 node: &self.root,
-                needle_fragment: shape.bounding_box(),
+                needle_fragment: manager.bounding_volume(shape),
             }],
-            cutter,
+            manager,
         }
     }
 }
 
 struct ShapeFragment<B> {
-    bounding_box: B,
+    bounding_volume: B,
     shape_id: usize,
 }
 
@@ -104,12 +99,11 @@ enum KdvNodeChildren<P, B> {
 }
 
 impl<P, B> KdvNode<P, B> {
-    fn build<A, S, C>(depth: usize, axis: &[A], shapes: &[S], mut node_shapes: Vec<ShapeFragment<B>>, cutter: &mut C) ->
-        Result<KdvNode<P, B>, C::Error>
-        where S: Shape<A, BoundingBox = B>,
-              B: BoundingBox<Point = P>,
+    fn build<A, S, M>(depth: usize, axis: &[A], shapes: &[S], mut node_shapes: Vec<ShapeFragment<B>>, manager: &mut M) ->
+        Result<KdvNode<P, B>, M::Error>
+        where B: BoundingVolume<Point = P>,
               A: Axis<P>,
-              C: Cutter<S, A>,
+              M: VolumeManager<S, A, BoundingVolume = B>,
     {
         // locate cut point for coords
         let cut_axis_index = depth % axis.len();
@@ -118,9 +112,9 @@ impl<P, B> KdvNode<P, B> {
             node_shapes
                 .iter()
                 .flat_map(|sf| {
-                    let bbox = &sf.bounding_box;
-                    iter::once(bbox.min_corner())
-                        .chain(iter::once(bbox.max_corner()))
+                    let bvol = &sf.bounding_volume;
+                    iter::once(bvol.min_corner())
+                        .chain(iter::once(bvol.max_corner()))
                 })
         );
 
@@ -130,22 +124,22 @@ impl<P, B> KdvNode<P, B> {
             let mut right_shapes = Vec::new();
             let mut head = 0;
             while head < node_shapes.len() {
-                let ShapeFragment { shape_id, bounding_box, } = node_shapes.swap_remove(head);
-                let owner = shape_owner(&shapes[shape_id], bounding_box, cut_axis, &cut_point, cutter)?;
+                let ShapeFragment { shape_id, bounding_volume, } = node_shapes.swap_remove(head);
+                let owner = shape_owner(&shapes[shape_id], bounding_volume, cut_axis, &cut_point, manager)?;
                 match owner {
-                    ShapeOwner::Me(bounding_box) => {
+                    ShapeOwner::Me(bounding_volume) => {
                         let tail = node_shapes.len();
-                        node_shapes.push(ShapeFragment { shape_id, bounding_box, });
+                        node_shapes.push(ShapeFragment { shape_id, bounding_volume, });
                         node_shapes.swap(head, tail);
                         head += 1;
                     },
-                    ShapeOwner::Left(bounding_box) =>
-                        left_shapes.push(ShapeFragment { shape_id, bounding_box, }),
-                    ShapeOwner::Right(bounding_box) =>
-                        right_shapes.push(ShapeFragment { shape_id, bounding_box, }),
-                    ShapeOwner::Both { left_bbox, right_bbox, } => {
-                        left_shapes.push(ShapeFragment { shape_id, bounding_box: left_bbox, });
-                        right_shapes.push(ShapeFragment { shape_id, bounding_box: right_bbox, });
+                    ShapeOwner::Left(bounding_volume) =>
+                        left_shapes.push(ShapeFragment { shape_id, bounding_volume, }),
+                    ShapeOwner::Right(bounding_volume) =>
+                        right_shapes.push(ShapeFragment { shape_id, bounding_volume, }),
+                    ShapeOwner::Both { left_bvol, right_bvol, } => {
+                        left_shapes.push(ShapeFragment { shape_id, bounding_volume: left_bvol, });
+                        right_shapes.push(ShapeFragment { shape_id, bounding_volume: right_bvol, });
                     },
                 }
             }
@@ -155,18 +149,18 @@ impl<P, B> KdvNode<P, B> {
             } else if left_shapes.is_empty() {
                 KdvNodeChildren::OnlyRight {
                     cut_point: CutPoint { axis_index: cut_axis_index, point: cut_point, },
-                    child: Box::new(KdvNode::build(depth + 1, axis, shapes, right_shapes, cutter)?),
+                    child: Box::new(KdvNode::build(depth + 1, axis, shapes, right_shapes, manager)?),
                 }
             } else if right_shapes.is_empty() {
                 KdvNodeChildren::OnlyLeft {
                     cut_point: CutPoint { axis_index: cut_axis_index, point: cut_point, },
-                    child: Box::new(KdvNode::build(depth + 1, axis, shapes, left_shapes, cutter)?),
+                    child: Box::new(KdvNode::build(depth + 1, axis, shapes, left_shapes, manager)?),
                 }
             } else {
                 KdvNodeChildren::Both {
                     cut_point: CutPoint { axis_index: cut_axis_index, point: cut_point, },
-                    left: Box::new(KdvNode::build(depth + 1, axis, shapes, left_shapes, cutter)?),
-                    right: Box::new(KdvNode::build(depth + 1, axis, shapes, right_shapes, cutter)?),
+                    left: Box::new(KdvNode::build(depth + 1, axis, shapes, left_shapes, manager)?),
+                    right: Box::new(KdvNode::build(depth + 1, axis, shapes, right_shapes, manager)?),
                 }
             };
             Ok(KdvNode { shapes: node_shapes, children, })
@@ -184,15 +178,14 @@ enum ShapeOwner<B> {
     Me(B),
     Left(B),
     Right(B),
-    Both { left_bbox: B, right_bbox: B, },
+    Both { left_bvol: B, right_bvol: B, },
 }
 
-fn shape_owner<A, P, B, S, C>(shape: &S, fragment: B, cut_axis: &A, cut_point: &P, cutter: &mut C) ->
-    Result<ShapeOwner<B>, C::Error>
+fn shape_owner<A, P, B, S, M>(shape: &S, fragment: B, cut_axis: &A, cut_point: &P, manager: &mut M) ->
+    Result<ShapeOwner<B>, M::Error>
     where A: Axis<P>,
-          B: BoundingBox<Point = P>,
-          S: Shape<A, BoundingBox = B>,
-          C: Cutter<S, A>,
+          B: BoundingVolume<Point = P>,
+          M: VolumeManager<S, A, BoundingVolume = B>,
 {
     let min_corner = fragment.min_corner();
     let max_corner = fragment.max_corner();
@@ -201,8 +194,8 @@ fn shape_owner<A, P, B, S, C>(shape: &S, fragment: B, cut_axis: &A, cut_point: &
             ShapeOwner::Left(fragment),
         (Ordering::Greater, Ordering::Greater) | (Ordering::Equal, Ordering::Greater) =>
             ShapeOwner::Right(fragment),
-        _ => if let Some((left_bbox, right_bbox)) = cutter.cut(shape, &fragment, cut_axis, cut_point)? {
-            ShapeOwner::Both { left_bbox, right_bbox, }
+        _ => if let Some((left_bvol, right_bvol)) = manager.cut(shape, &fragment, cut_axis, cut_point)? {
+            ShapeOwner::Both { left_bvol, right_bvol, }
         } else {
             ShapeOwner::Me(fragment)
         }
@@ -214,12 +207,12 @@ enum TraverseTask<'t, P: 't, BS: 't, BN> {
     Intersect { needle_fragment: BN, shape_fragment: &'t ShapeFragment<BS>, axis_counter: usize, },
 }
 
-pub struct IntersectIter<'t, 's, 'c, A: 't, P: 't, SS: 't, BS: 't, SN: 's, BN, C: 'c> {
+pub struct IntersectIter<'t, 's, 'm, A: 't, P: 't, SS: 't, BS: 't, SN: 's, BN, M: 'm> {
     needle: &'s SN,
     axis: &'t [A],
     shapes: &'t [SS],
     queue: Vec<TraverseTask<'t, P, BS, BN>>,
-    cutter: &'c mut C,
+    manager: &'m mut M,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -229,15 +222,13 @@ pub struct Intersection<'t, SS: 't, BS: 't, BN> {
     pub needle_fragment: BN,
 }
 
-impl<'t, 's, 'c, A, P, SS, BS, SN, BN, C> Iterator for IntersectIter<'t, 's, 'c, A, P, SS, BS, SN, BN, C>
+impl<'t, 's, 'm, A, P, SS, BS, SN, BN, M> Iterator for IntersectIter<'t, 's, 'm, A, P, SS, BS, SN, BN, M>
     where A: Axis<P>,
-          SS: Shape<A, BoundingBox = BS>,
-          BS: BoundingBox<Point = P>,
-          SN: Shape<A, BoundingBox = BN>,
-          BN: BoundingBox<Point = BS::Point> + Clone,
-          C: Cutter<SN, A>,
+          BS: BoundingVolume<Point = P>,
+          BN: BoundingVolume<Point = BS::Point> + Clone,
+          M: VolumeManager<SN, A, BoundingVolume = BN>,
 {
-    type Item = Result<Intersection<'t, SS, BS, BN>, C::Error>;
+    type Item = Result<Intersection<'t, SS, BS, BN>, M::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         'outer: while let Some(task) = self.queue.pop() {
@@ -248,14 +239,14 @@ impl<'t, 's, 'c, A, P, SS, BS, SN, BN, C> Iterator for IntersectIter<'t, 's, 'c,
                             (),
                         KdvNodeChildren::OnlyLeft { ref cut_point, ref child, } => {
                             let cut_axis = &self.axis[cut_point.axis_index];
-                            match shape_owner(self.needle, needle_fragment.clone(), cut_axis, &cut_point.point, self.cutter) {
+                            match shape_owner(self.needle, needle_fragment.clone(), cut_axis, &cut_point.point, self.manager) {
                                 Ok(ShapeOwner::Me(needle_fragment)) =>
                                     self.queue.push(TraverseTask::Explore { node: child, needle_fragment, }),
                                 Ok(ShapeOwner::Left(needle_fragment)) =>
                                     self.queue.push(TraverseTask::Explore { node: child, needle_fragment, }),
                                 Ok(ShapeOwner::Right(..)) =>
                                     (),
-                                Ok(ShapeOwner::Both { left_bbox: needle_fragment, .. }) =>
+                                Ok(ShapeOwner::Both { left_bvol: needle_fragment, .. }) =>
                                     self.queue.push(TraverseTask::Explore { node: child, needle_fragment, }),
                                 Err(error) => {
                                     self.queue.clear();
@@ -265,14 +256,14 @@ impl<'t, 's, 'c, A, P, SS, BS, SN, BN, C> Iterator for IntersectIter<'t, 's, 'c,
                         },
                         KdvNodeChildren::OnlyRight { ref cut_point, ref child, } => {
                             let cut_axis = &self.axis[cut_point.axis_index];
-                            match shape_owner(self.needle, needle_fragment.clone(), cut_axis, &cut_point.point, self.cutter) {
+                            match shape_owner(self.needle, needle_fragment.clone(), cut_axis, &cut_point.point, self.manager) {
                                 Ok(ShapeOwner::Me(needle_fragment)) =>
                                     self.queue.push(TraverseTask::Explore { node: child, needle_fragment, }),
                                 Ok(ShapeOwner::Left(..)) =>
                                     (),
                                 Ok(ShapeOwner::Right(needle_fragment)) =>
                                     self.queue.push(TraverseTask::Explore { node: child, needle_fragment, }),
-                                Ok(ShapeOwner::Both { right_bbox: needle_fragment, .. }) =>
+                                Ok(ShapeOwner::Both { right_bvol: needle_fragment, .. }) =>
                                     self.queue.push(TraverseTask::Explore { node: child, needle_fragment, }),
                                 Err(error) => {
                                     self.queue.clear();
@@ -282,7 +273,7 @@ impl<'t, 's, 'c, A, P, SS, BS, SN, BN, C> Iterator for IntersectIter<'t, 's, 'c,
                         },
                         KdvNodeChildren::Both { ref cut_point, ref left, ref right, } => {
                             let cut_axis = &self.axis[cut_point.axis_index];
-                            match shape_owner(self.needle, needle_fragment.clone(), cut_axis, &cut_point.point, self.cutter) {
+                            match shape_owner(self.needle, needle_fragment.clone(), cut_axis, &cut_point.point, self.manager) {
                                 Ok(ShapeOwner::Me(fragment)) => {
                                     self.queue.push(TraverseTask::Explore { node: left, needle_fragment: fragment.clone(), });
                                     self.queue.push(TraverseTask::Explore { node: right, needle_fragment: fragment, });
@@ -291,9 +282,9 @@ impl<'t, 's, 'c, A, P, SS, BS, SN, BN, C> Iterator for IntersectIter<'t, 's, 'c,
                                     self.queue.push(TraverseTask::Explore { node: left, needle_fragment, }),
                                 Ok(ShapeOwner::Right(needle_fragment)) =>
                                     self.queue.push(TraverseTask::Explore { node: right, needle_fragment, }),
-                                Ok(ShapeOwner::Both { left_bbox, right_bbox, }) => {
-                                    self.queue.push(TraverseTask::Explore { node: left, needle_fragment: left_bbox, });
-                                    self.queue.push(TraverseTask::Explore { node: right, needle_fragment: right_bbox, });
+                                Ok(ShapeOwner::Both { left_bvol, right_bvol, }) => {
+                                    self.queue.push(TraverseTask::Explore { node: left, needle_fragment: left_bvol, });
+                                    self.queue.push(TraverseTask::Explore { node: right, needle_fragment: right_bvol, });
                                 },
                                 Err(error) => {
                                     self.queue.clear();
@@ -314,8 +305,8 @@ impl<'t, 's, 'c, A, P, SS, BS, SN, BN, C> Iterator for IntersectIter<'t, 's, 'c,
                     let no_intersection = self.axis.iter().any(|axis| {
                         let needle_min = needle_fragment.min_corner();
                         let needle_max = needle_fragment.max_corner();
-                        let shape_min = shape_fragment.bounding_box.min_corner();
-                        let shape_max = shape_fragment.bounding_box.max_corner();
+                        let shape_min = shape_fragment.bounding_volume.min_corner();
+                        let shape_max = shape_fragment.bounding_volume.max_corner();
                         (axis.cmp_points(&needle_min, &shape_max) == Ordering::Greater ||
                          axis.cmp_points(&needle_max, &shape_min) == Ordering::Less)
                     });
@@ -330,7 +321,7 @@ impl<'t, 's, 'c, A, P, SS, BS, SN, BN, C> Iterator for IntersectIter<'t, 's, 'c,
                                 .chain(iter::once(needle_fragment.max_corner()))
                         );
                         if let Some(cut_point) = maybe_cut_point {
-                            match self.cutter.cut(self.needle, &needle_fragment, cut_axis, &cut_point) {
+                            match self.manager.cut(self.needle, &needle_fragment, cut_axis, &cut_point) {
                                 Ok(Some((left_fragment, right_fragment))) => {
                                     self.queue.push(TraverseTask::Intersect {
                                         shape_fragment: shape_fragment.clone(),
@@ -356,7 +347,7 @@ impl<'t, 's, 'c, A, P, SS, BS, SN, BN, C> Iterator for IntersectIter<'t, 's, 'c,
                     }
                     return Some(Ok(Intersection {
                         shape: &self.shapes[shape_fragment.shape_id],
-                        shape_fragment: &shape_fragment.bounding_box,
+                        shape_fragment: &shape_fragment.bounding_volume,
                         needle_fragment,
                     }));
                 },
@@ -369,7 +360,7 @@ impl<'t, 's, 'c, A, P, SS, BS, SN, BN, C> Iterator for IntersectIter<'t, 's, 'c,
 #[cfg(test)]
 mod tests {
     use std::cmp::{min, max, Ordering};
-    use super::{Shape, KdvTree, Intersection};
+    use super::{KdvTree, Intersection};
 
     #[derive(Clone, Copy, PartialEq, Debug)]
     struct Point2d { x: i32, y: i32, }
@@ -410,7 +401,7 @@ mod tests {
     #[derive(PartialEq, Clone, Debug)]
     struct Rect2d { lt: Point2d, rb: Point2d, }
 
-    impl super::BoundingBox for Rect2d {
+    impl super::BoundingVolume for Rect2d {
         type Point = Point2d;
 
         fn min_corner(&self) -> Self::Point { self.lt }
@@ -420,36 +411,33 @@ mod tests {
     #[derive(PartialEq, Debug)]
     struct Line2d { src: Point2d, dst: Point2d, }
 
-    impl super::Shape<Axis> for Line2d {
-        type BoundingBox = Rect2d;
+    struct Manager;
 
-        fn bounding_box(&self) -> Self::BoundingBox {
+    impl super::VolumeManager<Line2d, Axis> for Manager {
+        type BoundingVolume = Rect2d;
+        type Error = ();
+
+        fn bounding_volume(&self, shape: &Line2d) -> Self::BoundingVolume {
             Rect2d {
-                lt: Point2d { x: min(self.src.x, self.dst.x), y: min(self.src.y, self.dst.y), },
-                rb: Point2d { x: max(self.src.x, self.dst.x), y: max(self.src.y, self.dst.y), },
+                lt: Point2d { x: min(shape.src.x, shape.dst.x), y: min(shape.src.y, shape.dst.y), },
+                rb: Point2d { x: max(shape.src.x, shape.dst.x), y: max(shape.src.y, shape.dst.y), },
             }
         }
-    }
-
-    struct Cutter;
-
-    impl super::Cutter<Line2d, Axis> for Cutter {
-        type Error = ();
 
         fn cut(&mut self, shape: &Line2d, fragment: &Rect2d, cut_axis: &Axis, cut_point: &Point2d) ->
             Result<Option<(Rect2d, Rect2d)>, Self::Error>
         {
-            let bbox = shape.bounding_box();
+            let bvol = self.bounding_volume(shape);
             let (side, x, y) = match cut_axis {
                 &Axis::X => if cut_point.x >= fragment.lt.x && cut_point.x <= fragment.rb.x {
-                    let factor = (cut_point.x - bbox.lt.x) as f64 / (bbox.rb.x - bbox.lt.x) as f64;
-                    (fragment.rb.x - fragment.lt.x, cut_point.x, bbox.lt.y + (factor * (bbox.rb.y - bbox.lt.y) as f64) as i32)
+                    let factor = (cut_point.x - bvol.lt.x) as f64 / (bvol.rb.x - bvol.lt.x) as f64;
+                    (fragment.rb.x - fragment.lt.x, cut_point.x, bvol.lt.y + (factor * (bvol.rb.y - bvol.lt.y) as f64) as i32)
                 } else {
                     return Ok(None);
                 },
                 &Axis::Y => if cut_point.y >= fragment.lt.y && cut_point.y <= fragment.rb.y {
-                    let factor = (cut_point.y - bbox.lt.y) as f64 / (bbox.rb.y - bbox.lt.y) as f64;
-                    (fragment.rb.y - fragment.lt.y, bbox.lt.x + (factor * (bbox.rb.x - bbox.lt.x) as f64) as i32, cut_point.y)
+                    let factor = (cut_point.y - bvol.lt.y) as f64 / (bvol.rb.y - bvol.lt.y) as f64;
+                    (fragment.rb.y - fragment.lt.y, bvol.lt.x + (factor * (bvol.rb.x - bvol.lt.x) as f64) as i32, cut_point.y)
                 } else {
                     return Ok(None);
                 },
@@ -465,26 +453,26 @@ mod tests {
     #[test]
     fn kdv_tree_basic() {
         let shapes = vec![Line2d { src: Point2d { x: 16, y: 16, }, dst: Point2d { x: 80, y: 80, }, }];
-        let tree = KdvTree::build(vec![Axis::X, Axis::Y], shapes, &mut Cutter).unwrap();
+        let tree = KdvTree::build(vec![Axis::X, Axis::Y], shapes, &mut Manager).unwrap();
 
         assert_eq!(
-            tree.intersects(&Line2d { src: Point2d { x: 116, y: 116, }, dst: Point2d { x: 180, y: 180, }, }, &mut Cutter)
+            tree.intersects(&Line2d { src: Point2d { x: 116, y: 116, }, dst: Point2d { x: 180, y: 180, }, }, &mut Manager)
                 .collect::<Result<Vec<_>, _>>(),
             Ok(vec![])
         );
         assert_eq!(
-            tree.intersects(&Line2d { src: Point2d { x: 32, y: 48, }, dst: Point2d { x: 48, y: 64, }, }, &mut Cutter)
+            tree.intersects(&Line2d { src: Point2d { x: 32, y: 48, }, dst: Point2d { x: 48, y: 64, }, }, &mut Manager)
                 .collect::<Result<Vec<_>, _>>(),
             Ok(vec![])
         );
         assert_eq!(
-            tree.intersects(&Line2d { src: Point2d { x: 48, y: 32, }, dst: Point2d { x: 64, y: 48, }, }, &mut Cutter)
+            tree.intersects(&Line2d { src: Point2d { x: 48, y: 32, }, dst: Point2d { x: 64, y: 48, }, }, &mut Manager)
                 .collect::<Result<Vec<_>, _>>(),
             Ok(vec![])
         );
 
         let intersects: Result<Vec<_>, _> = tree
-            .intersects(&Line2d { src: Point2d { x: 16, y: 64, }, dst: Point2d { x: 80, y: 64, }, }, &mut Cutter)
+            .intersects(&Line2d { src: Point2d { x: 16, y: 64, }, dst: Point2d { x: 80, y: 64, }, }, &mut Manager)
             .collect();
         assert_eq!(intersects, Ok(vec![
             Intersection {
@@ -509,7 +497,7 @@ mod tests {
             },
         ]));
         let intersects: Result<Vec<_>, _> = tree
-            .intersects(&Line2d { src: Point2d { x: 64, y: 16, }, dst: Point2d { x: 64, y: 80, }, }, &mut Cutter)
+            .intersects(&Line2d { src: Point2d { x: 64, y: 16, }, dst: Point2d { x: 64, y: 80, }, }, &mut Manager)
             .collect();
         assert_eq!(intersects, Ok(vec![
             Intersection {
@@ -542,16 +530,16 @@ mod tests {
             Line2d { src: Point2d { x: 16, y: 16, }, dst: Point2d { x: 80, y: 80, }, },
             Line2d { src: Point2d { x: 80, y: 16, }, dst: Point2d { x: 80, y: 80, }, },
         ];
-        let tree = KdvTree::build(vec![Axis::X, Axis::Y], shapes, &mut Cutter).unwrap();
+        let tree = KdvTree::build(vec![Axis::X, Axis::Y], shapes, &mut Manager).unwrap();
 
         assert_eq!(
-            tree.intersects(&Line2d { src: Point2d { x: 70, y: 45, }, dst: Point2d { x: 75, y: 50, }, }, &mut Cutter)
+            tree.intersects(&Line2d { src: Point2d { x: 70, y: 45, }, dst: Point2d { x: 75, y: 50, }, }, &mut Manager)
                 .collect::<Result<Vec<_>, _>>(),
             Ok(vec![])
         );
 
         let intersects: Result<Vec<_>, _> = tree
-            .intersects(&Line2d { src: Point2d { x: 8, y: 48, }, dst: Point2d { x: 88, y: 48, }, }, &mut Cutter)
+            .intersects(&Line2d { src: Point2d { x: 8, y: 48, }, dst: Point2d { x: 88, y: 48, }, }, &mut Manager)
             .collect();
         assert_eq!(intersects, Ok(vec![
             Intersection {
@@ -571,7 +559,7 @@ mod tests {
             },
         ]));
         let intersects: Result<Vec<_>, _> = tree
-            .intersects(&Line2d { src: Point2d { x: 40, y: 10, }, dst: Point2d { x: 90, y: 60, }, }, &mut Cutter)
+            .intersects(&Line2d { src: Point2d { x: 40, y: 10, }, dst: Point2d { x: 90, y: 60, }, }, &mut Manager)
             .collect();
         assert_eq!(intersects, Ok(vec![
             Intersection {

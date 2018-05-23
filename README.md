@@ -6,6 +6,10 @@ The k-d tree is a binary tree in which every node is a k-dimensional point. Ever
 
 Read more on [wikipedia](https://en.wikipedia.org/wiki/K-d_tree)
 
+Visualizer: [kdtree-demo](https://github.com/swizard0/kdtree-demo)
+
+![kdtree visualizer](https://github.com/swizard0/kdtree-demo/blob/master/images/screenshot_00.png "KD-tree visualizer")
+
 ## Example usage
 
 ## Authors

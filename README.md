@@ -6,11 +6,15 @@ The k-d tree is a binary tree in which every node is a k-dimensional point. Ever
 
 Read more on [wikipedia](https://en.wikipedia.org/wiki/K-d_tree)
 
+Additional specific features are implemented in the current library for collision detection tasks. By splitting objects bounding volumes it allows not only to detect the fact of collision, but also to locate a collision point for complex objects with the given accuracy.
+
 Visualizer: [kdtree-demo](https://github.com/swizard0/kdtree-demo)
 
 ![kdtree visualizer](https://github.com/swizard0/kdtree-demo/blob/master/images/screenshot_00.png "KD-tree visualizer")
 
 ## Example usage
+
+See library [tests](src/lib.rs#L365) section or [kdtree demo](https://github.com/swizard0/kdtree-demo) visualizer code.
 
 ## Authors
 

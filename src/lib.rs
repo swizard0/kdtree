@@ -320,6 +320,7 @@ impl<'t, 's, 'm, A, P, SS, BS, SN, BN, M> Iterator for IntersectIter<'t, 's, 'm,
                     let axis_total = self.axis.len();
                     for _ in 0 .. axis_total {
                         let cut_axis = &self.axis[axis_counter % axis_total];
+                        axis_counter += 1;
                         let maybe_cut_point = self.manager.cut_point(
                             cut_axis,
                             iter::once(needle_fragment.min_corner())
@@ -348,7 +349,6 @@ impl<'t, 's, 'm, A, P, SS, BS, SN, BN, M> Iterator for IntersectIter<'t, 's, 'm,
                                 },
                             }
                         }
-                        axis_counter += 1;
                     }
                     return Some(Ok(Intersection {
                         shape: &self.shapes[shape_fragment.shape_id],

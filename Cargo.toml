@@ -2,6 +2,12 @@
 name = "kdtree"
 version = "0.4.2"
 description = "K-dimensional tree space-partitioning data structure"
+homepage = "https://github.com/swizard0/kdtree"
+repository = "https://github.com/swizard0/kdtree"
+keywords = [ "tree", "collision", "algorithms", "geometry", "kd" ]
+categories = ["algorithms"]
+readme = "README.md"
+license = "MIT"
 authors = ["Alexey Voznyuk <me@swizard.info>"]
 
 [dependencies]

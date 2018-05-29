@@ -4,13 +4,19 @@ use std::cmp::Ordering;
 #[cfg(test)]
 mod tests;
 
-pub trait Axis<P> {
-    fn cmp_points(&self, a: &P, b: &P) -> Ordering;
-}
-
 pub trait BoundingVolume<P> {
     fn min_corner(&self) -> P;
     fn max_corner(&self) -> P;
+}
+
+pub trait CmpPoints<A, P> {
+    fn cmp_points(&self, axis: &A, a: &P, b: &P) -> Ordering;
+}
+
+impl<A, P, F> CmpPoints<A, P> for F where F: Fn(&A, &P, &P) -> Ordering {
+    fn cmp_points(&self, axis: &A, a: &P, b: &P) -> Ordering {
+        (self)(axis, a, b)
+    }
 }
 
 pub trait GetBoundingVolume<B, S> {
@@ -57,12 +63,12 @@ pub struct KdvTree<A, P, B, S> {
 }
 
 impl<A, P, B, S> KdvTree<A, P, B, S>
-    where A: Axis<P>,
-          B: BoundingVolume<P>,
+    where B: BoundingVolume<P>,
 {
-    pub fn build<IA, II, BVF, CPF, CBF>(
+    pub fn build<IA, II, CMF, BVF, CPF, CBF>(
         axis_it: IA,
         shapes_it: II,
+        cmp_p: CMF,
         get_bv: BVF,
         mut get_cp: CPF,
         mut cut_bv: CBF,
@@ -70,6 +76,7 @@ impl<A, P, B, S> KdvTree<A, P, B, S>
         -> Result<KdvTree<A, P, B, S>, CBF::Error>
         where IA: IntoIterator<Item = A>,
               II: IntoIterator<Item = S>,
+              CMF: CmpPoints<A, P>,
               BVF: GetBoundingVolume<B, S>,
               CPF: GetCutPoint<A, P>,
               CBF: BoundingVolumesCutter<A, P, B, S>,
@@ -85,20 +92,22 @@ impl<A, P, B, S> KdvTree<A, P, B, S>
             })
             .collect();
         Ok(KdvTree {
-            root: KdvNode::build(0, &axis, &shapes, root_shapes, &get_bv, &mut get_cp, &mut cut_bv)?,
+            root: KdvNode::build(0, &axis, &shapes, root_shapes, &cmp_p, &get_bv, &mut get_cp, &mut cut_bv)?,
             axis, shapes,
         })
     }
 
-    pub fn intersects<'t, 's, SN, BN, BVF, CPF, CBF>(
+    pub fn intersects<'t, 's, SN, BN, CMF, BVF, CPF, CBF>(
         &'t self,
         shape: &'s SN,
+        cmp_p: CMF,
         get_bv: BVF,
         get_cp: CPF,
         cut_bv: CBF,
     )
-        -> IntersectIter<'t, 's, A, P, S, B, SN, BN, CPF, CBF>
-        where BVF: GetBoundingVolume<BN, SN>,
+        -> IntersectIter<'t, 's, A, P, S, B, SN, BN, CMF, CPF, CBF>
+        where CMF: CmpPoints<A, P>,
+              BVF: GetBoundingVolume<BN, SN>,
               CPF: GetCutPoint<A, P>,
               CBF: BoundingVolumesCutter<A, P, BN, SN>,
     {
@@ -110,6 +119,7 @@ impl<A, P, B, S> KdvTree<A, P, B, S>
                 node: &self.root,
                 needle_fragment: get_bv.bounding_volume(shape),
             }],
+            cmp_p,
             get_cp,
             cut_bv,
         }
@@ -139,18 +149,19 @@ enum KdvNodeChildren<P, B> {
 }
 
 impl<P, B> KdvNode<P, B> {
-    fn build<A, S, BVF, CPF, CBF>(
+    fn build<A, S, CMF, BVF, CPF, CBF>(
         depth: usize,
         axis: &[A],
         shapes: &[S],
         mut node_shapes: Vec<ShapeFragment<B>>,
+        cmp_p: &CMF,
         get_bv: &BVF,
         get_cp: &mut CPF,
         cut_bv: &mut CBF,
     )
         -> Result<KdvNode<P, B>, CBF::Error>
         where B: BoundingVolume<P>,
-              A: Axis<P>,
+              CMF: CmpPoints<A, P>,
               BVF: GetBoundingVolume<B, S>,
               CPF: GetCutPoint<A, P>,
               CBF: BoundingVolumesCutter<A, P, B, S>,
@@ -176,7 +187,7 @@ impl<P, B> KdvNode<P, B> {
             let mut head = 0;
             while head < node_shapes.len() {
                 let ShapeFragment { shape_id, bounding_volume, } = node_shapes.swap_remove(head);
-                let owner = shape_owner(&shapes[shape_id], bounding_volume, cut_axis, &cut_point, cut_bv)?;
+                let owner = shape_owner(&shapes[shape_id], bounding_volume, cut_axis, &cut_point, cmp_p, cut_bv)?;
                 match owner {
                     ShapeOwner::Me(bounding_volume) => {
                         let tail = node_shapes.len();
@@ -200,18 +211,18 @@ impl<P, B> KdvNode<P, B> {
             } else if left_shapes.is_empty() {
                 KdvNodeChildren::OnlyRight {
                     cut_point: CutPoint { axis_index: cut_axis_index, point: cut_point, },
-                    child: Box::new(KdvNode::build(depth + 1, axis, shapes, right_shapes, get_bv, get_cp, cut_bv)?),
+                    child: Box::new(KdvNode::build(depth + 1, axis, shapes, right_shapes, cmp_p, get_bv, get_cp, cut_bv)?),
                 }
             } else if right_shapes.is_empty() {
                 KdvNodeChildren::OnlyLeft {
                     cut_point: CutPoint { axis_index: cut_axis_index, point: cut_point, },
-                    child: Box::new(KdvNode::build(depth + 1, axis, shapes, left_shapes, get_bv, get_cp, cut_bv)?),
+                    child: Box::new(KdvNode::build(depth + 1, axis, shapes, left_shapes, cmp_p, get_bv, get_cp, cut_bv)?),
                 }
             } else {
                 KdvNodeChildren::Both {
                     cut_point: CutPoint { axis_index: cut_axis_index, point: cut_point, },
-                    left: Box::new(KdvNode::build(depth + 1, axis, shapes, left_shapes, get_bv, get_cp, cut_bv)?),
-                    right: Box::new(KdvNode::build(depth + 1, axis, shapes, right_shapes, get_bv, get_cp, cut_bv)?),
+                    left: Box::new(KdvNode::build(depth + 1, axis, shapes, left_shapes, cmp_p, get_bv, get_cp, cut_bv)?),
+                    right: Box::new(KdvNode::build(depth + 1, axis, shapes, right_shapes, cmp_p, get_bv, get_cp, cut_bv)?),
                 }
             };
             Ok(KdvNode { shapes: node_shapes, children, })
@@ -232,15 +243,15 @@ enum ShapeOwner<B> {
     Both { left_bvol: B, right_bvol: B, },
 }
 
-fn shape_owner<A, P, B, S, CBF>(shape: &S, fragment: B, cut_axis: &A, cut_point: &P, cut_bv: &mut CBF) ->
+fn shape_owner<A, P, B, S, CMF, CBF>(shape: &S, fragment: B, cut_axis: &A, cut_point: &P, cmp_p: &CMF, cut_bv: &mut CBF) ->
     Result<ShapeOwner<B>, CBF::Error>
-    where A: Axis<P>,
-          B: BoundingVolume<P>,
+    where B: BoundingVolume<P>,
+          CMF: CmpPoints<A, P>,
           CBF: BoundingVolumesCutter<A, P, B, S>,
 {
     let min_corner = fragment.min_corner();
     let max_corner = fragment.max_corner();
-    Ok(match (cut_axis.cmp_points(&min_corner, cut_point), cut_axis.cmp_points(&max_corner, cut_point)) {
+    Ok(match (cmp_p.cmp_points(&cut_axis, &min_corner, cut_point), cmp_p.cmp_points(&cut_axis, &max_corner, cut_point)) {
         (Ordering::Less, Ordering::Less) | (Ordering::Less, Ordering::Equal) =>
             ShapeOwner::Left(fragment),
         (Ordering::Greater, Ordering::Greater) | (Ordering::Equal, Ordering::Greater) =>
@@ -258,11 +269,12 @@ enum TraverseTask<'t, P: 't, BS: 't, BN> {
     Intersect { needle_fragment: BN, shape_fragment: &'t ShapeFragment<BS>, axis_counter: usize, },
 }
 
-pub struct IntersectIter<'t, 's, A: 't, P: 't, SS: 't, BS: 't, SN: 's, BN, CPF, CBF> {
+pub struct IntersectIter<'t, 's, A: 't, P: 't, SS: 't, BS: 't, SN: 's, BN, CMF, CPF, CBF> {
     needle: &'s SN,
     axis: &'t [A],
     shapes: &'t [SS],
     queue: Vec<TraverseTask<'t, P, BS, BN>>,
+    cmp_p: CMF,
     get_cp: CPF,
     cut_bv: CBF,
 }
@@ -274,10 +286,10 @@ pub struct Intersection<'t, SS: 't, BS: 't, BN> {
     pub needle_fragment: BN,
 }
 
-impl<'t, 's, A, P, SS, BS, SN, BN, CPF, CBF> Iterator for IntersectIter<'t, 's, A, P, SS, BS, SN, BN, CPF, CBF>
-    where A: Axis<P>,
-          BS: BoundingVolume<P>,
+impl<'t, 's, A, P, SS, BS, SN, BN, CMF, CPF, CBF> Iterator for IntersectIter<'t, 's, A, P, SS, BS, SN, BN, CMF, CPF, CBF>
+    where BS: BoundingVolume<P>,
           BN: BoundingVolume<P> + Clone,
+          CMF: CmpPoints<A, P>,
           CPF: GetCutPoint<A, P>,
           CBF: BoundingVolumesCutter<A, P, BN, SN>,
 {
@@ -292,7 +304,7 @@ impl<'t, 's, A, P, SS, BS, SN, BN, CPF, CBF> Iterator for IntersectIter<'t, 's, 
                             (),
                         KdvNodeChildren::OnlyLeft { ref cut_point, ref child, } => {
                             let cut_axis = &self.axis[cut_point.axis_index];
-                            match shape_owner(self.needle, needle_fragment.clone(), cut_axis, &cut_point.point, &mut self.cut_bv) {
+                            match shape_owner(self.needle, needle_fragment.clone(), cut_axis, &cut_point.point, &self.cmp_p, &mut self.cut_bv) {
                                 Ok(ShapeOwner::Me(needle_fragment)) =>
                                     self.queue.push(TraverseTask::Explore { node: child, needle_fragment, }),
                                 Ok(ShapeOwner::Left(needle_fragment)) =>
@@ -309,7 +321,7 @@ impl<'t, 's, A, P, SS, BS, SN, BN, CPF, CBF> Iterator for IntersectIter<'t, 's, 
                         },
                         KdvNodeChildren::OnlyRight { ref cut_point, ref child, } => {
                             let cut_axis = &self.axis[cut_point.axis_index];
-                            match shape_owner(self.needle, needle_fragment.clone(), cut_axis, &cut_point.point, &mut self.cut_bv) {
+                            match shape_owner(self.needle, needle_fragment.clone(), cut_axis, &cut_point.point, &self.cmp_p, &mut self.cut_bv) {
                                 Ok(ShapeOwner::Me(needle_fragment)) =>
                                     self.queue.push(TraverseTask::Explore { node: child, needle_fragment, }),
                                 Ok(ShapeOwner::Left(..)) =>
@@ -326,7 +338,7 @@ impl<'t, 's, A, P, SS, BS, SN, BN, CPF, CBF> Iterator for IntersectIter<'t, 's, 
                         },
                         KdvNodeChildren::Both { ref cut_point, ref left, ref right, } => {
                             let cut_axis = &self.axis[cut_point.axis_index];
-                            match shape_owner(self.needle, needle_fragment.clone(), cut_axis, &cut_point.point, &mut self.cut_bv) {
+                            match shape_owner(self.needle, needle_fragment.clone(), cut_axis, &cut_point.point, &self.cmp_p, &mut self.cut_bv) {
                                 Ok(ShapeOwner::Me(fragment)) => {
                                     self.queue.push(TraverseTask::Explore { node: left, needle_fragment: fragment.clone(), });
                                     self.queue.push(TraverseTask::Explore { node: right, needle_fragment: fragment, });
@@ -360,8 +372,8 @@ impl<'t, 's, A, P, SS, BS, SN, BN, CPF, CBF> Iterator for IntersectIter<'t, 's, 
                         let needle_max = needle_fragment.max_corner();
                         let shape_min = shape_fragment.bounding_volume.min_corner();
                         let shape_max = shape_fragment.bounding_volume.max_corner();
-                        (axis.cmp_points(&needle_min, &shape_max) == Ordering::Greater ||
-                         axis.cmp_points(&needle_max, &shape_min) == Ordering::Less)
+                        (self.cmp_p.cmp_points(axis, &needle_min, &shape_max) == Ordering::Greater ||
+                         self.cmp_p.cmp_points(axis, &needle_max, &shape_min) == Ordering::Less)
                     });
                     if no_intersection {
                         continue;

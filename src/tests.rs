@@ -7,12 +7,10 @@ struct Point2d { x: i32, y: i32, }
 #[derive(Clone, Debug)]
 enum Axis { X, Y, }
 
-impl super::Axis<Point2d> for Axis {
-    fn cmp_points(&self, a: &Point2d, b: &Point2d) -> Ordering {
-        match self {
-            &Axis::X => a.x.cmp(&b.x),
-            &Axis::Y => a.y.cmp(&b.y),
-        }
+fn cmp_points(axis: &Axis, a: &Point2d, b: &Point2d) -> Ordering {
+    match axis {
+        &Axis::X => a.x.cmp(&b.x),
+        &Axis::Y => a.y.cmp(&b.y),
     }
 }
 
@@ -128,11 +126,12 @@ fn cut_volume(shape: &Line2d, fragment: &Rect2d, cut_axis: &Axis, cut_point: &Po
 #[test]
 fn kdv_tree_basic() {
     let shapes = vec![Line2d { src: Point2d { x: 16, y: 16, }, dst: Point2d { x: 80, y: 80, }, }];
-    let tree = KdvTree::build(vec![Axis::X, Axis::Y], shapes, get_bounding_volume, get_cut_point, cut_volume).unwrap();
+    let tree = KdvTree::build(vec![Axis::X, Axis::Y], shapes, cmp_points, get_bounding_volume, get_cut_point, cut_volume).unwrap();
 
     assert_eq!(
         tree.intersects(
             &Line2d { src: Point2d { x: 116, y: 116, }, dst: Point2d { x: 180, y: 180, }, },
+            cmp_points,
             get_bounding_volume,
             get_cut_point,
             cut_volume,
@@ -143,6 +142,7 @@ fn kdv_tree_basic() {
     assert_eq!(
         tree.intersects(
             &Line2d { src: Point2d { x: 32, y: 48, }, dst: Point2d { x: 48, y: 64, }, },
+            cmp_points,
             get_bounding_volume,
             get_cut_point,
             cut_volume,
@@ -153,6 +153,7 @@ fn kdv_tree_basic() {
     assert_eq!(
         tree.intersects(
             &Line2d { src: Point2d { x: 48, y: 32, }, dst: Point2d { x: 64, y: 48, }, },
+            cmp_points,
             get_bounding_volume,
             get_cut_point,
             cut_volume,
@@ -164,6 +165,7 @@ fn kdv_tree_basic() {
     let intersects: Result<Vec<_>, _> = tree
         .intersects(
             &Line2d { src: Point2d { x: 16, y: 64, }, dst: Point2d { x: 80, y: 64, }, },
+            cmp_points,
             get_bounding_volume,
             get_cut_point,
             cut_volume,
@@ -194,6 +196,7 @@ fn kdv_tree_basic() {
     let intersects: Result<Vec<_>, _> = tree
         .intersects(
             &Line2d { src: Point2d { x: 64, y: 16, }, dst: Point2d { x: 64, y: 80, }, },
+            cmp_points,
             get_bounding_volume,
             get_cut_point,
             cut_volume,
@@ -230,11 +233,12 @@ fn kdv_tree_triangle() {
         Line2d { src: Point2d { x: 16, y: 16, }, dst: Point2d { x: 80, y: 80, }, },
         Line2d { src: Point2d { x: 80, y: 16, }, dst: Point2d { x: 80, y: 80, }, },
     ];
-    let tree = KdvTree::build(vec![Axis::X, Axis::Y], shapes, get_bounding_volume, get_cut_point, cut_volume).unwrap();
+    let tree = KdvTree::build(vec![Axis::X, Axis::Y], shapes, cmp_points, get_bounding_volume, get_cut_point, cut_volume).unwrap();
 
     assert_eq!(
         tree.intersects(
             &Line2d { src: Point2d { x: 70, y: 45, }, dst: Point2d { x: 75, y: 50, }, },
+            cmp_points,
             get_bounding_volume,
             get_cut_point,
             cut_volume,
@@ -246,6 +250,7 @@ fn kdv_tree_triangle() {
     let intersects: Result<Vec<_>, _> = tree
         .intersects(
             &Line2d { src: Point2d { x: 8, y: 48, }, dst: Point2d { x: 88, y: 48, }, },
+            cmp_points,
             get_bounding_volume,
             get_cut_point,
             cut_volume,
@@ -271,6 +276,7 @@ fn kdv_tree_triangle() {
     let intersects: Result<Vec<_>, _> = tree
         .intersects(
             &Line2d { src: Point2d { x: 40, y: 10, }, dst: Point2d { x: 90, y: 60, }, },
+            cmp_points,
             get_bounding_volume,
             get_cut_point,
             cut_volume,

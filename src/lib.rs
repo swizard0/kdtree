@@ -1,5 +1,6 @@
-use std::iter;
 use std::cmp::Ordering;
+use std::iter::{self, FromIterator};
+use std::collections::{BinaryHeap, HashSet};
 
 #[cfg(test)]
 mod tests;
@@ -53,6 +54,34 @@ impl<A, P, B, S, F, E> BoundingVolumesCutter<A, P, B, S> for F where F: FnMut(&S
 
     fn cut(&mut self, shape: &S, fragment: &B, cut_axis: &A, cut_point: &P) -> Result<Option<(B, B)>, Self::Error> {
         (self)(shape, fragment, cut_axis, cut_point)
+    }
+}
+
+pub trait DistanceBVCP<A, P, B> {
+    type Dist;
+
+    fn bv_to_cut_point_distance(&self, axis: &A, bounding_volume: &B, cut_point: &P) -> Self::Dist;
+}
+
+impl<A, P, B, F, D> DistanceBVCP<A, P, B> for F where F: Fn(&A, &B, &P) -> D {
+    type Dist = D;
+
+    fn bv_to_cut_point_distance(&self, axis: &A, bounding_volume: &B, cut_point: &P) -> Self::Dist {
+        (self)(axis, bounding_volume, cut_point)
+    }
+}
+
+pub trait DistanceBVBV<BA, BB> {
+    type Dist;
+
+    fn bv_to_bv_distance(&self, bounding_volume_a: &BA, bounding_volume_b: &BB) -> Self::Dist;
+}
+
+impl<BA, BB, F, D> DistanceBVBV<BA, BB> for F where F: Fn(&BA, &BB) -> D {
+    type Dist = D;
+
+    fn bv_to_bv_distance(&self, bounding_volume_a: &BA, bounding_volume_b: &BB) -> Self::Dist {
+        (self)(bounding_volume_a, bounding_volume_b)
     }
 }
 
@@ -122,6 +151,35 @@ impl<A, P, B, S> KdvTree<A, P, B, S>
             cmp_p,
             get_cp,
             cut_bv,
+        }
+    }
+
+    pub fn nearest<'t, SN, BN, D, CMF, BVF, DPF, DVF>(
+        &'t self,
+        shape: &SN,
+        cmp_p: CMF,
+        get_bv: BVF,
+        dist_cp: DPF,
+        dist_bv: DVF,
+    )
+        -> NearestIter<'t, A, P, S, B, BN, D, DPF, DVF>
+        where BVF: GetBoundingVolume<BN, SN>,
+              DPF: DistanceBVCP<A, P, BN, Dist = D>,
+              DVF: DistanceBVBV<B, BN, Dist = D>,
+              D: PartialEq + PartialOrd,
+    {
+        NearestIter {
+            needle_bv: get_bv.bounding_volume(shape),
+            axis: &self.axis,
+            shapes: &self.shapes,
+            nodes_queue: BinaryHeap::from_iter(iter::once(NearestNode {
+                dist: None,
+                node: &self.root,
+            })),
+            neighbours: BinaryHeap::new(),
+            visited: HashSet::new(),
+            dist_cp,
+            dist_bv,
         }
     }
 }
@@ -420,5 +478,87 @@ impl<'t, 's, A, P, SS, BS, SN, BN, CMF, CPF, CBF> Iterator for IntersectIter<'t,
             }
         }
         None
+    }
+}
+
+struct NearestNode<'t, P: 't, B: 't, D> where D: PartialEq + PartialOrd {
+    dist: Option<D>,
+    node: &'t KdvNode<P, B>
+}
+
+pub struct NearestShape<'t, S: 't, D> {
+    pub dist: D,
+    pub shape: &'t S,
+}
+
+pub struct NearestIter<'t, A: 't, P: 't, S: 't, B: 't, BN, D, DPF, DVF> where D: PartialEq + PartialOrd {
+    needle_bv: BN,
+    axis: &'t [A],
+    shapes: &'t [S],
+    nodes_queue: BinaryHeap<NearestNode<'t, P, B, D>>,
+    neighbours: BinaryHeap<NearestShape<'t, S, D>>,
+    visited: HashSet<usize>,
+    dist_cp: DPF,
+    dist_bv: DVF,
+}
+
+impl<'t, P, B, D> Ord for NearestNode<'t, P, B, D> where D: PartialOrd {
+    fn cmp(&self, other: &NearestNode<'t, P, B, D>) -> Ordering {
+        match (&self.dist, &other.dist) {
+            (&None, &None) =>
+                Ordering::Equal,
+            (&None, &Some(..)) =>
+                Ordering::Greater,
+            (&Some(..), &None) =>
+                Ordering::Less,
+            (&Some(ref da), &Some(ref db)) =>
+                if da < db {
+                    Ordering::Greater
+                } else if da > db {
+                    Ordering::Less
+                } else {
+                    Ordering::Equal
+                },
+        }
+    }
+}
+
+impl<'t, P, B, D> PartialOrd for NearestNode<'t, P, B, D> where D: PartialOrd {
+    fn partial_cmp(&self, other: &NearestNode<'t, P, B, D>) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'t, P, B, D> Eq for NearestNode<'t, P, B, D> where D: PartialEq + PartialOrd { }
+
+impl<'t, P, B, D> PartialEq for NearestNode<'t, P, B, D> where D: PartialEq + PartialOrd {
+    fn eq(&self, other: &NearestNode<'t, P, B, D>) -> bool {
+        self.dist == other.dist
+    }
+}
+
+impl<'t, S, D> Ord for NearestShape<'t, S, D> where D: PartialOrd {
+    fn cmp(&self, other: &NearestShape<'t, S, D>) -> Ordering {
+        if self.dist < other.dist {
+            Ordering::Greater
+        } else if self.dist > other.dist {
+            Ordering::Less
+        } else {
+            Ordering::Equal
+        }
+    }
+}
+
+impl<'t, S, D> PartialOrd for NearestShape<'t, S, D> where D: PartialOrd {
+    fn partial_cmp(&self, other: &NearestShape<'t, S, D>) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'t, S, D> Eq for NearestShape<'t, S, D> where D: PartialEq + PartialOrd { }
+
+impl<'t, S, D> PartialEq for NearestShape<'t, S, D> where D: PartialEq + PartialOrd {
+    fn eq(&self, other: &NearestShape<'t, S, D>) -> bool {
+        self.dist == other.dist
     }
 }

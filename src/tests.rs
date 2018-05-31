@@ -1,5 +1,5 @@
 use std::cmp::{min, max, Ordering};
-use super::{KdvTree, Intersection};
+use super::{KdvTree, Intersection, NearestShape};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct Point2d { x: i32, y: i32, }
@@ -121,6 +121,27 @@ fn cut_volume(shape: &Line2d, fragment: &Rect2d, cut_axis: &Axis, cut_point: &Po
             return Ok(None);
         },
     }
+}
+
+fn bv_to_cut_point_distance(axis: &Axis, bounding_volume: &Rect2d, cut_point: &Point2d) -> i64 {
+    match axis {
+        &Axis::X =>
+            min((bounding_volume.lt.x - cut_point.x).abs() as i64, (bounding_volume.rb.x - cut_point.x).abs() as i64),
+        &Axis::Y =>
+            min((bounding_volume.lt.y - cut_point.y).abs() as i64, (bounding_volume.rb.y - cut_point.y).abs() as i64),
+    }
+}
+
+fn bv_to_bv_distance(bounding_volume_a: &Rect2d, bounding_volume_b: &Rect2d) -> i64 {
+    let center_a = Point2d {
+        x: (bounding_volume_a.lt.x + bounding_volume_a.rb.x) / 2,
+        y: (bounding_volume_a.lt.y + bounding_volume_a.rb.y) / 2,
+    };
+    let center_b = Point2d {
+        x: (bounding_volume_b.lt.x + bounding_volume_b.rb.x) / 2,
+        y: (bounding_volume_b.lt.y + bounding_volume_b.rb.y) / 2,
+    };
+    ((center_b.x - center_a.x) as i64 * (center_b.x - center_a.x) as i64) + ((center_b.y - center_a.y) as i64 * (center_b.y - center_a.y) as i64)
 }
 
 #[test]
@@ -294,4 +315,57 @@ fn kdv_tree_triangle() {
             needle_fragment: Rect2d { lt: Point2d { x: 40, y: 10 }, rb: Point2d { x: 48, y: 18 } },
         },
     ]));
+}
+
+#[test]
+fn kdv_tree_nearest() {
+    let shapes = vec![
+        Line2d { src: Point2d { x: 16, y: 16, }, dst: Point2d { x: 80, y: 16, }, },
+        Line2d { src: Point2d { x: 16, y: 16, }, dst: Point2d { x: 80, y: 80, }, },
+        Line2d { src: Point2d { x: 80, y: 16, }, dst: Point2d { x: 80, y: 80, }, },
+    ];
+    let tree = KdvTree::build(vec![Axis::X, Axis::Y], shapes, cmp_points, get_bounding_volume, get_cut_point, cut_volume).unwrap();
+
+    let nearest: Vec<_> = tree
+        .nearest(
+            &Line2d { src: Point2d { x: 44, y: 8, }, dst: Point2d { x: 52, y: 12, }, },
+            cmp_points,
+            get_bounding_volume,
+            bv_to_cut_point_distance,
+            bv_to_bv_distance,
+        )
+        .collect();
+    assert_eq!(nearest, vec![
+        NearestShape { dist: 61, shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } } },
+        NearestShape { dist: 724, shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } } },
+        NearestShape { dist: 1553, shape: &Line2d { src: Point2d { x: 80, y: 16 }, dst: Point2d { x: 80, y: 80 } } },
+    ]);
+    let nearest: Vec<_> = tree
+        .nearest(
+            &Line2d { src: Point2d { x: 44, y: 88, }, dst: Point2d { x: 52, y: 92, }, },
+            cmp_points,
+            get_bounding_volume,
+            bv_to_cut_point_distance,
+            bv_to_bv_distance,
+        )
+        .collect();
+    assert_eq!(nearest, vec![
+        NearestShape { dist: 884, shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } } },
+        NearestShape { dist: 2180, shape: &Line2d { src: Point2d { x: 80, y: 16 }, dst: Point2d { x: 80, y: 80 } } },
+        NearestShape { dist: 5501, shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } } },
+    ]);
+    let nearest: Vec<_> = tree
+        .nearest(
+            &Line2d { src: Point2d { x: 144, y: 48, }, dst: Point2d { x: 152, y: 52, }, },
+            cmp_points,
+            get_bounding_volume,
+            bv_to_cut_point_distance,
+            bv_to_bv_distance,
+        )
+        .collect();
+    assert_eq!(nearest, vec![
+        NearestShape { dist: 4660, shape: &Line2d { src: Point2d { x: 80, y: 16 }, dst: Point2d { x: 80, y: 80 } } },
+        NearestShape { dist: 5770, shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } } },
+        NearestShape { dist: 6197, shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } } },
+    ]);
 }

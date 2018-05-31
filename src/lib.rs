@@ -489,6 +489,7 @@ struct NearestNode<'t, P: 't, B: 't, D> where D: PartialEq + PartialOrd {
     node: &'t KdvNode<P, B>
 }
 
+#[derive(Clone, Debug)]
 pub struct NearestShape<'t, S: 't, D> {
     pub dist: D,
     pub shape: &'t S,

@@ -1,6 +1,6 @@
 [package]
 name = "kdvtree"
-version = "0.7.1"
+version = "0.7.2"
 description = "K-dimensional tree space-partitioning data structure"
 homepage = "https://github.com/swizard0/kdtree"
 repository = "https://github.com/swizard0/kdtree"

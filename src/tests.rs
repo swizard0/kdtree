@@ -1,4 +1,5 @@
 use std::cmp::{min, max, Ordering};
+use rand::{self, Rng};
 use super::{KdvTree, Intersection, NearestShape};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -50,76 +51,84 @@ fn get_cut_point(_cut_axis: &Axis, points: &mut Iterator<Item = Point2d>) -> Opt
     }
 }
 
-fn cut_volume(shape: &Line2d, fragment: &Rect2d, cut_axis: &Axis, cut_point: &Point2d) ->
-    Result<Option<(Rect2d, Rect2d)>, ()>
-{
-    match cut_axis {
-        &Axis::X => if cut_point.x >= fragment.lt.x && cut_point.x <= fragment.rb.x {
-            if fragment.rb.x - fragment.lt.x < 10 {
-                Ok(None)
+struct Cutter {
+    cut_limit: i32,
+}
+
+impl super::BoundingVolumesCutter<Axis, Point2d, Rect2d, Line2d> for Cutter {
+    type Error = ();
+
+    fn cut(&mut self, shape: &Line2d, fragment: &Rect2d, cut_axis: &Axis, cut_point: &Point2d) ->
+        Result<Option<(Rect2d, Rect2d)>, ()>
+    {
+        match cut_axis {
+            &Axis::X => if cut_point.x >= fragment.lt.x && cut_point.x <= fragment.rb.x {
+                if fragment.rb.x - fragment.lt.x < self.cut_limit {
+                    Ok(None)
+                } else {
+                    let factor = (cut_point.x - shape.src.x) as f64 / (shape.dst.x - shape.src.x) as f64;
+                    let y = shape.src.y as f64 + (factor * (shape.dst.y - shape.src.y) as f64);
+                    let left_point = if shape.src.x < shape.dst.x { shape.src } else { shape.dst };
+                    let left_bound = Rect2d {
+                        lt: Point2d {
+                            x: fragment.lt.x,
+                            y: if left_point.y < y as i32 { fragment.lt.y } else { y as i32 },
+                        },
+                        rb: Point2d {
+                            x: cut_point.x,
+                            y: if left_point.y < y as i32 { y as i32 } else { fragment.rb.y },
+                        }
+                    };
+                    let right_point = if shape.src.x < shape.dst.x { shape.dst } else { shape.src };
+                    let right_bound = Rect2d {
+                        lt: Point2d {
+                            x: cut_point.x,
+                            y: if right_point.y < y as i32 { fragment.lt.y } else { y as i32 },
+                        },
+                        rb: Point2d {
+                            x: fragment.rb.x,
+                            y: if right_point.y < y as i32 { y as i32 } else { fragment.rb.y },
+                        },
+                    };
+                    Ok(Some((left_bound, right_bound)))
+                }
             } else {
-                let factor = (cut_point.x - shape.src.x) as f64 / (shape.dst.x - shape.src.x) as f64;
-                let y = shape.src.y as f64 + (factor * (shape.dst.y - shape.src.y) as f64);
-                let left_point = if shape.src.x < shape.dst.x { shape.src } else { shape.dst };
-                let left_bound = Rect2d {
-                    lt: Point2d {
-                        x: fragment.lt.x,
-                        y: if left_point.y < y as i32 { fragment.lt.y } else { y as i32 },
-                    },
-                    rb: Point2d {
-                        x: cut_point.x,
-                        y: if left_point.y < y as i32 { y as i32 } else { fragment.rb.y },
-                    }
-                };
-                let right_point = if shape.src.x < shape.dst.x { shape.dst } else { shape.src };
-                let right_bound = Rect2d {
-                    lt: Point2d {
-                        x: cut_point.x,
-                        y: if right_point.y < y as i32 { fragment.lt.y } else { y as i32 },
-                    },
-                    rb: Point2d {
-                        x: fragment.rb.x,
-                        y: if right_point.y < y as i32 { y as i32 } else { fragment.rb.y },
-                    },
-                };
-                Ok(Some((left_bound, right_bound)))
-            }
-        } else {
-            return Ok(None);
-        },
-        &Axis::Y => if cut_point.y >= fragment.lt.y && cut_point.y <= fragment.rb.y {
-            if fragment.rb.y - fragment.lt.y < 10 {
-                Ok(None)
+                return Ok(None);
+            },
+            &Axis::Y => if cut_point.y >= fragment.lt.y && cut_point.y <= fragment.rb.y {
+                if fragment.rb.y - fragment.lt.y < self.cut_limit {
+                    Ok(None)
+                } else {
+                    let factor = (cut_point.y - shape.src.y) as f64 / (shape.dst.y - shape.src.y) as f64;
+                    let x = shape.src.x as f64 + (factor * (shape.dst.x - shape.src.x) as f64);
+                    let upper_point = if shape.src.y < shape.dst.y { shape.src } else { shape.dst };
+                    let upper_bound = Rect2d {
+                        lt: Point2d {
+                            x: if upper_point.x < x as i32 { fragment.lt.x } else { x as i32 },
+                            y: fragment.lt.y,
+                        },
+                        rb: Point2d {
+                            x: if upper_point.x < x as i32 { x as i32 } else { fragment.rb.x },
+                            y: cut_point.y,
+                        }
+                    };
+                    let lower_point = if shape.src.y < shape.dst.y { shape.dst } else { shape.src };
+                    let lower_bound = Rect2d {
+                        lt: Point2d {
+                            x: if lower_point.x < x as i32 { fragment.lt.x } else { x as i32 },
+                            y: cut_point.y,
+                        },
+                        rb: Point2d {
+                            x: if lower_point.x < x as i32 { x as i32 } else { fragment.rb.x },
+                            y: fragment.rb.y,
+                        },
+                    };
+                    Ok(Some((upper_bound, lower_bound)))
+                }
             } else {
-                let factor = (cut_point.y - shape.src.y) as f64 / (shape.dst.y - shape.src.y) as f64;
-                let x = shape.src.x as f64 + (factor * (shape.dst.x - shape.src.x) as f64);
-                let upper_point = if shape.src.y < shape.dst.y { shape.src } else { shape.dst };
-                let upper_bound = Rect2d {
-                    lt: Point2d {
-                        x: if upper_point.x < x as i32 { fragment.lt.x } else { x as i32 },
-                        y: fragment.lt.y,
-                    },
-                    rb: Point2d {
-                        x: if upper_point.x < x as i32 { x as i32 } else { fragment.rb.x },
-                        y: cut_point.y,
-                    }
-                };
-                let lower_point = if shape.src.y < shape.dst.y { shape.dst } else { shape.src };
-                let lower_bound = Rect2d {
-                    lt: Point2d {
-                        x: if lower_point.x < x as i32 { fragment.lt.x } else { x as i32 },
-                        y: cut_point.y,
-                    },
-                    rb: Point2d {
-                        x: if lower_point.x < x as i32 { x as i32 } else { fragment.rb.x },
-                        y: fragment.rb.y,
-                    },
-                };
-                Ok(Some((upper_bound, lower_bound)))
-            }
-        } else {
-            return Ok(None);
-        },
+                return Ok(None);
+            },
+        }
     }
 }
 
@@ -148,7 +157,7 @@ fn bv_to_bv_sq_dist(bounding_volume_a: &Rect2d, bounding_volume_b: &Rect2d) -> i
 #[test]
 fn kdv_tree_basic() {
     let shapes = vec![Line2d { src: Point2d { x: 16, y: 16, }, dst: Point2d { x: 80, y: 80, }, }];
-    let tree = KdvTree::build(vec![Axis::X, Axis::Y], shapes, cmp_points, get_bounding_volume, get_cut_point, cut_volume).unwrap();
+    let tree = KdvTree::build(vec![Axis::X, Axis::Y], shapes, cmp_points, get_bounding_volume, get_cut_point, Cutter { cut_limit: 10, }).unwrap();
 
     assert_eq!(
         tree.intersects(
@@ -156,7 +165,7 @@ fn kdv_tree_basic() {
             cmp_points,
             get_bounding_volume,
             get_cut_point,
-            cut_volume,
+            Cutter { cut_limit: 10, },
         )
             .collect::<Result<Vec<_>, _>>(),
         Ok(vec![])
@@ -167,7 +176,7 @@ fn kdv_tree_basic() {
             cmp_points,
             get_bounding_volume,
             get_cut_point,
-            cut_volume,
+            Cutter { cut_limit: 10, },
         )
             .collect::<Result<Vec<_>, _>>(),
         Ok(vec![])
@@ -178,7 +187,7 @@ fn kdv_tree_basic() {
             cmp_points,
             get_bounding_volume,
             get_cut_point,
-            cut_volume,
+            Cutter { cut_limit: 10, },
         )
             .collect::<Result<Vec<_>, _>>(),
         Ok(vec![])
@@ -190,7 +199,7 @@ fn kdv_tree_basic() {
             cmp_points,
             get_bounding_volume,
             get_cut_point,
-            cut_volume,
+            Cutter { cut_limit: 10, },
         )
         .collect();
     assert_eq!(intersects, Ok(vec![
@@ -221,7 +230,7 @@ fn kdv_tree_basic() {
             cmp_points,
             get_bounding_volume,
             get_cut_point,
-            cut_volume,
+            Cutter { cut_limit: 10, },
         )
         .collect();
     assert_eq!(intersects, Ok(vec![
@@ -255,7 +264,7 @@ fn kdv_tree_triangle() {
         Line2d { src: Point2d { x: 16, y: 16, }, dst: Point2d { x: 80, y: 80, }, },
         Line2d { src: Point2d { x: 80, y: 16, }, dst: Point2d { x: 80, y: 80, }, },
     ];
-    let tree = KdvTree::build(vec![Axis::X, Axis::Y], shapes, cmp_points, get_bounding_volume, get_cut_point, cut_volume).unwrap();
+    let tree = KdvTree::build(vec![Axis::X, Axis::Y], shapes, cmp_points, get_bounding_volume, get_cut_point, Cutter { cut_limit: 10, }).unwrap();
 
     assert_eq!(
         tree.intersects(
@@ -263,7 +272,7 @@ fn kdv_tree_triangle() {
             cmp_points,
             get_bounding_volume,
             get_cut_point,
-            cut_volume,
+            Cutter { cut_limit: 10, },
         )
             .collect::<Result<Vec<_>, _>>(),
         Ok(vec![])
@@ -275,7 +284,7 @@ fn kdv_tree_triangle() {
             cmp_points,
             get_bounding_volume,
             get_cut_point,
-            cut_volume,
+            Cutter { cut_limit: 10, },
         )
         .collect();
     assert_eq!(intersects, Ok(vec![
@@ -301,7 +310,7 @@ fn kdv_tree_triangle() {
             cmp_points,
             get_bounding_volume,
             get_cut_point,
-            cut_volume,
+            Cutter { cut_limit: 10, },
         )
         .collect();
     assert_eq!(intersects, Ok(vec![
@@ -325,7 +334,7 @@ fn kdv_tree_nearest() {
         Line2d { src: Point2d { x: 16, y: 16, }, dst: Point2d { x: 80, y: 80, }, },
         Line2d { src: Point2d { x: 80, y: 16, }, dst: Point2d { x: 80, y: 80, }, },
     ];
-    let tree = KdvTree::build(vec![Axis::X, Axis::Y], shapes, cmp_points, get_bounding_volume, get_cut_point, cut_volume).unwrap();
+    let tree = KdvTree::build(vec![Axis::X, Axis::Y], shapes, cmp_points, get_bounding_volume, get_cut_point, Cutter { cut_limit: 10, }).unwrap();
 
     let nearest: Vec<_> = tree
         .nearest(
@@ -611,4 +620,22 @@ fn kdv_tree_nearest() {
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
         },
     ]);
+}
+
+#[test]
+fn kdv_tree_nearest_big_o() {
+    let mut rng = rand::thread_rng();
+    let mut random_line = || {
+        let src = Point2d { x: rng.gen_range(-1000000, 1000000), y: rng.gen_range(-1000000, 1000000), };
+        let dst = Point2d { x: src.x + rng.gen_range(-100000, 100000), y: src.y + rng.gen_range(-100000, 100000), };
+        Line2d { src, dst }
+    };
+    let tree1k = KdvTree::build(
+        vec![Axis::X, Axis::Y],
+        (0 .. 1000).map(|_| random_line()),
+        cmp_points,
+        get_bounding_volume,
+        get_cut_point,
+        Cutter { cut_limit: 1000, }
+    ).unwrap();
 }

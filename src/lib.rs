@@ -1,3 +1,6 @@
+#[cfg(test)]
+extern crate rand;
+
 use std::cmp::Ordering;
 use std::iter::{self, FromIterator};
 use std::collections::{BinaryHeap, binary_heap::PeekMut};
@@ -120,10 +123,143 @@ impl<A, P, B, S> KdvTree<A, P, B, S>
                 shape_id: i,
             })
             .collect();
-        Ok(KdvTree {
-            root: KdvNode::build(0, &axis, &shapes, root_shapes, &cmp_p, &get_bv, &mut get_cp, &mut cut_bv)?,
-            axis, shapes,
-        })
+
+        struct Op<P, B> {
+            node_shapes: Vec<ShapeFragment<B>>,
+            instruction: Instruction<P>,
+        }
+
+        enum Instruction<P> {
+            MakeNode { depth: usize, },
+            AssembleOnlyLeft { cut_point: CutPoint<P>, },
+            AssembleOnlyRight { cut_point: CutPoint<P>, },
+            AssembleBoth { cut_point: CutPoint<P>, },
+        }
+
+        let mut ops_stack = vec![Op { node_shapes: root_shapes, instruction: Instruction::MakeNode { depth: 0, }, }];
+        let mut ret_stack: Vec<KdvNode<P, B>> = vec![];
+        while let Some(op) = ops_stack.pop() {
+            match op {
+                Op { mut node_shapes, instruction: Instruction::MakeNode { depth, }, } => {
+                    // locate cut point for coords
+                    let cut_axis_index = depth % axis.len();
+                    let cut_axis = &axis[cut_axis_index];
+                    let maybe_cut_point = get_cp.cut_point(
+                        cut_axis,
+                        node_shapes
+                            .iter()
+                            .flat_map(|sf| {
+                                let bvol = &sf.bounding_volume;
+                                iter::once(bvol.min_corner())
+                                    .chain(iter::once(bvol.max_corner()))
+                            }),
+                    );
+
+                    if let Some(cut_point) = maybe_cut_point {
+                        // distribute shapes among children
+                        let mut left_shapes = Vec::new();
+                        let mut right_shapes = Vec::new();
+                        let mut head = 0;
+                        while head < node_shapes.len() {
+                            let ShapeFragment { shape_id, bounding_volume, } = node_shapes.swap_remove(head);
+                            let owner = shape_owner(&shapes[shape_id], bounding_volume, cut_axis, &cut_point, &cmp_p, &mut cut_bv)?;
+                            match owner {
+                                ShapeOwner::Me(bounding_volume) => {
+                                    let tail = node_shapes.len();
+                                    node_shapes.push(ShapeFragment { shape_id, bounding_volume, });
+                                    node_shapes.swap(head, tail);
+                                    head += 1;
+                                },
+                                ShapeOwner::Left(bounding_volume) =>
+                                    left_shapes.push(ShapeFragment { shape_id, bounding_volume, }),
+                                ShapeOwner::Right(bounding_volume) =>
+                                    right_shapes.push(ShapeFragment { shape_id, bounding_volume, }),
+                                ShapeOwner::Both { left_bvol, right_bvol, } => {
+                                    left_shapes.push(ShapeFragment { shape_id, bounding_volume: left_bvol, });
+                                    right_shapes.push(ShapeFragment { shape_id, bounding_volume: right_bvol, });
+                                },
+                            }
+                        }
+                        // construct the node
+                        if left_shapes.is_empty() && right_shapes.is_empty() {
+                            ret_stack.push(KdvNode {
+                                shapes: node_shapes,
+                                children: KdvNodeChildren::Missing,
+                            });
+                        } else if left_shapes.is_empty() {
+                            ops_stack.push(Op {
+                                node_shapes,
+                                instruction: Instruction::AssembleOnlyRight {
+                                    cut_point: CutPoint { axis_index: cut_axis_index, point: cut_point, },
+                                },
+                            });
+                            ops_stack.push(Op {
+                                node_shapes: right_shapes,
+                                instruction: Instruction::MakeNode { depth: depth + 1, },
+                            });
+                        } else if right_shapes.is_empty() {
+                            ops_stack.push(Op {
+                                node_shapes,
+                                instruction: Instruction::AssembleOnlyLeft {
+                                    cut_point: CutPoint { axis_index: cut_axis_index, point: cut_point, },
+                                },
+                            });
+                            ops_stack.push(Op {
+                                node_shapes: left_shapes,
+                                instruction: Instruction::MakeNode { depth: depth + 1, },
+                            });
+                        } else {
+                            ops_stack.push(Op {
+                                node_shapes,
+                                instruction: Instruction::AssembleBoth {
+                                    cut_point: CutPoint { axis_index: cut_axis_index, point: cut_point, },
+                                },
+                            });
+                            ops_stack.push(Op {
+                                node_shapes: left_shapes,
+                                instruction: Instruction::MakeNode { depth: depth + 1, },
+                            });
+                            ops_stack.push(Op {
+                                node_shapes: right_shapes,
+                                instruction: Instruction::MakeNode { depth: depth + 1, },
+                            });
+                        }
+                    } else {
+                        // no cut point choosen, keep all shapes in current node
+                        ret_stack.push(KdvNode {
+                            shapes: node_shapes,
+                            children: KdvNodeChildren::Missing,
+                        });
+                    }
+                },
+                Op { node_shapes, instruction: Instruction::AssembleOnlyLeft { cut_point, }, } => {
+                    let child = ret_stack.pop().map(Box::new).unwrap_or_else(|| unreachable!());
+                    ret_stack.push(KdvNode {
+                        shapes: node_shapes,
+                        children: KdvNodeChildren::OnlyLeft { cut_point, child },
+                    });
+                },
+                Op { node_shapes, instruction: Instruction::AssembleOnlyRight { cut_point, }, } => {
+                    let child = ret_stack.pop().map(Box::new).unwrap_or_else(|| unreachable!());
+                    ret_stack.push(KdvNode {
+                        shapes: node_shapes,
+                        children: KdvNodeChildren::OnlyRight { cut_point, child, },
+                    });
+                },
+                Op { node_shapes, instruction: Instruction::AssembleBoth { cut_point, }, } => {
+                    let left = ret_stack.pop().map(Box::new).unwrap_or_else(|| unreachable!());
+                    let right = ret_stack.pop().map(Box::new).unwrap_or_else(|| unreachable!());
+                    ret_stack.push(KdvNode {
+                        shapes: node_shapes,
+                        children: KdvNodeChildren::Both { cut_point, left, right },
+                    });
+                },
+            }
+        }
+
+        let root = ret_stack.pop().unwrap_or_else(|| unreachable!());
+        assert!(ret_stack.is_empty());
+        Ok(KdvTree { root, axis, shapes, })
     }
 
     pub fn intersects<'t, 's, SN, BN, CMF, BVF, CPF, CBF>(
@@ -205,94 +341,6 @@ enum KdvNodeChildren<P, B> {
     OnlyLeft { cut_point: CutPoint<P>, child: Box<KdvNode<P, B>>, },
     OnlyRight { cut_point: CutPoint<P>, child: Box<KdvNode<P, B>>, },
     Both { cut_point: CutPoint<P>, left: Box<KdvNode<P, B>>, right: Box<KdvNode<P, B>>, },
-}
-
-impl<P, B> KdvNode<P, B> {
-    fn build<A, S, CMF, BVF, CPF, CBF>(
-        depth: usize,
-        axis: &[A],
-        shapes: &[S],
-        mut node_shapes: Vec<ShapeFragment<B>>,
-        cmp_p: &CMF,
-        get_bv: &BVF,
-        get_cp: &mut CPF,
-        cut_bv: &mut CBF,
-    )
-        -> Result<KdvNode<P, B>, CBF::Error>
-        where B: BoundingVolume<P>,
-              CMF: CmpPoints<A, P>,
-              BVF: GetBoundingVolume<B, S>,
-              CPF: GetCutPoint<A, P>,
-              CBF: BoundingVolumesCutter<A, P, B, S>,
-    {
-        // locate cut point for coords
-        let cut_axis_index = depth % axis.len();
-        let cut_axis = &axis[cut_axis_index];
-        let maybe_cut_point = get_cp.cut_point(
-            cut_axis,
-            node_shapes
-                .iter()
-                .flat_map(|sf| {
-                    let bvol = &sf.bounding_volume;
-                    iter::once(bvol.min_corner())
-                        .chain(iter::once(bvol.max_corner()))
-                }),
-        );
-
-        if let Some(cut_point) = maybe_cut_point {
-            // distribute shapes among children
-            let mut left_shapes = Vec::new();
-            let mut right_shapes = Vec::new();
-            let mut head = 0;
-            while head < node_shapes.len() {
-                let ShapeFragment { shape_id, bounding_volume, } = node_shapes.swap_remove(head);
-                let owner = shape_owner(&shapes[shape_id], bounding_volume, cut_axis, &cut_point, cmp_p, cut_bv)?;
-                match owner {
-                    ShapeOwner::Me(bounding_volume) => {
-                        let tail = node_shapes.len();
-                        node_shapes.push(ShapeFragment { shape_id, bounding_volume, });
-                        node_shapes.swap(head, tail);
-                        head += 1;
-                    },
-                    ShapeOwner::Left(bounding_volume) =>
-                        left_shapes.push(ShapeFragment { shape_id, bounding_volume, }),
-                    ShapeOwner::Right(bounding_volume) =>
-                        right_shapes.push(ShapeFragment { shape_id, bounding_volume, }),
-                    ShapeOwner::Both { left_bvol, right_bvol, } => {
-                        left_shapes.push(ShapeFragment { shape_id, bounding_volume: left_bvol, });
-                        right_shapes.push(ShapeFragment { shape_id, bounding_volume: right_bvol, });
-                    },
-                }
-            }
-            // construct the node
-            let children = if left_shapes.is_empty() && right_shapes.is_empty() {
-                KdvNodeChildren::Missing
-            } else if left_shapes.is_empty() {
-                KdvNodeChildren::OnlyRight {
-                    cut_point: CutPoint { axis_index: cut_axis_index, point: cut_point, },
-                    child: Box::new(KdvNode::build(depth + 1, axis, shapes, right_shapes, cmp_p, get_bv, get_cp, cut_bv)?),
-                }
-            } else if right_shapes.is_empty() {
-                KdvNodeChildren::OnlyLeft {
-                    cut_point: CutPoint { axis_index: cut_axis_index, point: cut_point, },
-                    child: Box::new(KdvNode::build(depth + 1, axis, shapes, left_shapes, cmp_p, get_bv, get_cp, cut_bv)?),
-                }
-            } else {
-                KdvNodeChildren::Both {
-                    cut_point: CutPoint { axis_index: cut_axis_index, point: cut_point, },
-                    left: Box::new(KdvNode::build(depth + 1, axis, shapes, left_shapes, cmp_p, get_bv, get_cp, cut_bv)?),
-                    right: Box::new(KdvNode::build(depth + 1, axis, shapes, right_shapes, cmp_p, get_bv, get_cp, cut_bv)?),
-                }
-            };
-            Ok(KdvNode { shapes: node_shapes, children, })
-        } else {
-            // no cut point choosen, keep all shapes in current node
-            Ok(KdvNode {
-                shapes: node_shapes,
-                children: KdvNodeChildren::Missing,
-            })
-        }
-    }
 }
 
 enum ShapeOwner<B> {

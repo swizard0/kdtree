@@ -1,6 +1,6 @@
 [package]
 name = "kdvtree"
-version = "0.7.3"
+version = "0.7.4"
 description = "K-dimensional tree space-partitioning data structure"
 homepage = "https://github.com/swizard0/kdtree"
 repository = "https://github.com/swizard0/kdtree"
@@ -10,4 +10,5 @@ readme = "README.md"
 license = "MIT"
 authors = ["Alexey Voznyuk <me@swizard.info>"]
 
-[dependencies]
+[dev-dependencies]
+rand = "0.4"

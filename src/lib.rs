@@ -318,6 +318,13 @@ impl<A, P, B, S> KdvTree<A, P, B, S>
             dist_bv,
         }
     }
+
+    pub fn iter<'t>(&'t self) -> Iter<'t, P, B, S> {
+        Iter {
+            shapes: &self.shapes,
+            pending: vec![(0, &self.root)],
+        }
+    }
 }
 
 struct ShapeFragment<B> {
@@ -737,5 +744,55 @@ impl<'t, B, S, D> Eq for NearestShape<'t, B, S, D> where D: PartialEq + PartialO
 impl<'t, B, S, D> PartialEq for NearestShape<'t, B, S, D> where D: PartialEq + PartialOrd {
     fn eq(&self, other: &NearestShape<'t, B, S, D>) -> bool {
         self.dist == other.dist
+    }
+}
+
+pub struct Iter<'t, P: 't, B: 't, S: 't> {
+    shapes: &'t [S],
+    pending: Vec<(usize, &'t KdvNode<P, B>)>,
+}
+
+impl<'t, P, B, S> Iterator for Iter<'t, P, B, S> {
+    type Item = KdvNodeRef<'t, B, S>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some((depth, node)) = self.pending.pop() {
+            match node.children {
+                KdvNodeChildren::Missing =>
+                    (),
+                KdvNodeChildren::OnlyLeft { ref child, .. } =>
+                    self.pending.push((depth + 1, &*child)),
+                KdvNodeChildren::OnlyRight { ref child, .. } =>
+                    self.pending.push((depth + 1, &*child)),
+                KdvNodeChildren::Both { ref left, ref right, .. } => {
+                    self.pending.push((depth + 1, &*right));
+                    self.pending.push((depth + 1, &*left));
+                },
+            }
+            Some(KdvNodeRef {
+                shapes: self.shapes,
+                fragments: &node.shapes,
+                depth,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+pub struct KdvNodeRef<'t, B: 't, S: 't> {
+    shapes: &'t [S],
+    fragments: &'t [ShapeFragment<B>],
+    depth: usize,
+}
+
+impl<'t, B, S> KdvNodeRef<'t, B, S> {
+    pub fn depth(&self) -> usize {
+        self.depth
+    }
+
+    pub fn shapes(self) -> impl Iterator<Item = (&'t S, &'t B)> {
+        self.fragments.into_iter()
+            .map(move |fragment| (&self.shapes[fragment.shape_id], &fragment.bounding_volume))
     }
 }

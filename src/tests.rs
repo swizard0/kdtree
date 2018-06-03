@@ -169,6 +169,12 @@ fn bv_to_bv_sq_dist(bounding_volume_a: &Rect2d, bounding_volume_b: &Rect2d) -> i
     ((center_b.x - center_a.x) as i64 * (center_b.x - center_a.x) as i64) + ((center_b.y - center_a.y) as i64 * (center_b.y - center_a.y) as i64)
 }
 
+fn random_line<R>(rng: &mut R) -> Line2d where R: Rng {
+    let src = Point2d { x: rng.gen_range(-1000000, 1000000), y: rng.gen_range(-1000000, 1000000), };
+    let dst = Point2d { x: src.x + rng.gen_range(-100000, 100000), y: src.y + rng.gen_range(-100000, 100000), };
+    Line2d { src, dst }
+}
+
 #[test]
 fn kdv_tree_basic() {
     let shapes = vec![Line2d { src: Point2d { x: 16, y: 16, }, dst: Point2d { x: 80, y: 80, }, }];
@@ -642,13 +648,43 @@ fn kdv_tree_nearest() {
 }
 
 #[test]
+fn kdv_tree_nearest_check() {
+    let tree = KdvTree::build(
+        vec![Axis::X, Axis::Y],
+        (0 .. 1000).map(|_| random_line(&mut rand::thread_rng())),
+        cmp_points,
+        get_bounding_volume,
+        get_cut_point,
+        Cutter { cut_limit: 1000, }
+    ).unwrap();
+
+    let mut sample = random_line(&mut rand::thread_rng());
+    sample.dst.x = sample.src.x + 10;
+    sample.dst.y = sample.src.y + 10;
+    let sample_bv = get_bounding_volume(&sample);
+
+    let nearest_a = tree.nearest(
+        &sample,
+        cmp_points,
+        get_bounding_volume,
+        bv_to_cut_point_sq_dist,
+        bv_to_bv_sq_dist,
+    ).next().unwrap();
+
+    let nearest_b = tree.iter()
+        .flat_map(move |node| node.shapes())
+        .map(|(shape, fragment)| (bv_to_bv_sq_dist(&sample_bv, fragment), shape, fragment))
+        .min_by_key(|t| t.0)
+        .unwrap();
+
+    assert_eq!(nearest_a.dist, nearest_b.0);
+    assert_eq!(nearest_a.shape, nearest_b.1);
+    assert_eq!(nearest_a.shape_fragment, nearest_b.2);
+}
+
+#[test]
 fn kdv_tree_nearest_big_o() {
-    fn random_line<R>(rng: &mut R) -> Line2d where R: Rng  {
-        let src = Point2d { x: rng.gen_range(-1000000, 1000000), y: rng.gen_range(-1000000, 1000000), };
-        let dst = Point2d { x: src.x + rng.gen_range(-100000, 100000), y: src.y + rng.gen_range(-100000, 100000), };
-        Line2d { src, dst }
-    };
-    fn avg_dist_count(shapes_count: usize, avg_count: usize) -> usize {
+    fn avg_dist_count(shapes_count: usize, avg_count: usize) -> (usize, usize, usize) {
         let tree = KdvTree::build(
             vec![Axis::X, Axis::Y],
             (0 .. shapes_count).map(|_| random_line(&mut rand::thread_rng())),
@@ -676,15 +712,20 @@ fn kdv_tree_nearest_big_o() {
             ).next().unwrap();
             total += dist_cp_counter + dist_bv_counter;
         }
-        total / avg_count
+        let avg_total = total / avg_count;
+        let mut max_depth = 0;
+        let mut nodes_count = 0;
+        for node in tree.iter() {
+            if node.depth() > max_depth { max_depth = node.depth() }
+            nodes_count += 1;
+        }
+        (avg_total, max_depth, nodes_count)
     }
 
-    let dist_count_100 = avg_dist_count(100, 5);
-    let dist_count_1k = avg_dist_count(1000, 5);
-    assert!(dist_count_1k < 500);
-    assert!(dist_count_1k < dist_count_100 * 9);
-    let dist_count_10k = avg_dist_count(10000, 5);
-    assert!(dist_count_1k < 5000);
-    assert!(dist_count_10k < dist_count_1k * 9);
-    assert!(dist_count_10k < dist_count_100 * 90);
+    let stats_100 = avg_dist_count(100, 5);
+    assert!(stats_100.0 * 10 < stats_100.2);
+    let stats_1k = avg_dist_count(1000, 5);
+    assert!(stats_1k.0 * 100 < stats_1k.2);
+    let stats_10k = avg_dist_count(10000, 5);
+    assert!(stats_10k.0 * 1000 < stats_10k.2);
 }

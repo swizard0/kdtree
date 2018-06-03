@@ -63,13 +63,13 @@ impl<A, P, B, S, F, E> BoundingVolumesCutter<A, P, B, S> for F where F: FnMut(&S
 pub trait DistanceBVCP<A, P, B> {
     type Dist;
 
-    fn bv_to_cut_point_distance(&self, axis: &A, bounding_volume: &B, cut_point: &P) -> Self::Dist;
+    fn bv_to_cut_point_distance(&mut self, axis: &A, bounding_volume: &B, cut_point: &P) -> Self::Dist;
 }
 
-impl<A, P, B, F, D> DistanceBVCP<A, P, B> for F where F: Fn(&A, &B, &P) -> D {
+impl<A, P, B, F, D> DistanceBVCP<A, P, B> for F where F: FnMut(&A, &B, &P) -> D {
     type Dist = D;
 
-    fn bv_to_cut_point_distance(&self, axis: &A, bounding_volume: &B, cut_point: &P) -> Self::Dist {
+    fn bv_to_cut_point_distance(&mut self, axis: &A, bounding_volume: &B, cut_point: &P) -> Self::Dist {
         (self)(axis, bounding_volume, cut_point)
     }
 }
@@ -77,13 +77,13 @@ impl<A, P, B, F, D> DistanceBVCP<A, P, B> for F where F: Fn(&A, &B, &P) -> D {
 pub trait DistanceBVBV<BA, BB> {
     type Dist;
 
-    fn bv_to_bv_distance(&self, bounding_volume_a: &BA, bounding_volume_b: &BB) -> Self::Dist;
+    fn bv_to_bv_distance(&mut self, bounding_volume_a: &BA, bounding_volume_b: &BB) -> Self::Dist;
 }
 
-impl<BA, BB, F, D> DistanceBVBV<BA, BB> for F where F: Fn(&BA, &BB) -> D {
+impl<BA, BB, F, D> DistanceBVBV<BA, BB> for F where F: FnMut(&BA, &BB) -> D {
     type Dist = D;
 
-    fn bv_to_bv_distance(&self, bounding_volume_a: &BA, bounding_volume_b: &BB) -> Self::Dist {
+    fn bv_to_bv_distance(&mut self, bounding_volume_a: &BA, bounding_volume_b: &BB) -> Self::Dist {
         (self)(bounding_volume_a, bounding_volume_b)
     }
 }
@@ -591,8 +591,8 @@ impl<'t, A, P, S, B, BN, D, CMF, DPF, DVF> Iterator for NearestIter<'t, A, P, S,
                     return Some(nearest_shape),
                 Err(nearest_node) => {
                     let shapes = self.shapes;
-                    let dist_cp = &self.dist_cp;
-                    let dist_bv = &self.dist_bv;
+                    let dist_cp = &mut self.dist_cp;
+                    let dist_bv = &mut self.dist_bv;
                     {
                         let needle_bv = &self.needle_bv;
                         self.neighbours.extend(

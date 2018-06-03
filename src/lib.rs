@@ -490,8 +490,8 @@ struct NearestNode<'t, P: 't, B: 't, D> where D: PartialEq + PartialOrd {
 #[derive(Clone, Debug)]
 pub struct NearestShape<'t, B: 't, S: 't, D> {
     pub dist: D,
-    pub fragment: &'t B,
     pub shape: &'t S,
+    pub shape_fragment: &'t B,
 }
 
 pub struct NearestIter<'t, A: 't, P: 't, S: 't, B: 't, BN, D, CMF, DPF, DVF> where D: PartialEq + PartialOrd {
@@ -551,8 +551,8 @@ impl<'t, A, P, S, B, BN, D, CMF, DPF, DVF> Iterator for NearestIter<'t, A, P, S,
                             nearest_node.node.shapes.iter()
                                 .map(|fragment| NearestShape {
                                     dist: dist_bv.bv_to_bv_distance(&fragment.bounding_volume, needle_bv),
-                                    fragment: &fragment.bounding_volume,
                                     shape: &shapes[fragment.shape_id],
+                                    shape_fragment: &fragment.bounding_volume,
                                 })
                         );
                     }

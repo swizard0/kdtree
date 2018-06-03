@@ -681,8 +681,10 @@ fn kdv_tree_nearest_big_o() {
 
     let dist_count_100 = avg_dist_count(100, 5);
     let dist_count_1k = avg_dist_count(1000, 5);
+    assert!(dist_count_1k < 500);
     assert!(dist_count_1k < dist_count_100 * 9);
     let dist_count_10k = avg_dist_count(10000, 5);
+    assert!(dist_count_1k < 5000);
     assert!(dist_count_10k < dist_count_1k * 9);
     assert!(dist_count_10k < dist_count_100 * 90);
 }

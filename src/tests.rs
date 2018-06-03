@@ -33,21 +33,36 @@ fn get_bounding_volume(shape: &Line2d) -> Rect2d {
     }
 }
 
-fn get_cut_point(_cut_axis: &Axis, points: &mut Iterator<Item = Point2d>) -> Option<Point2d> {
-    let mut total = 0;
-    let mut point_sum = Point2d { x: 0, y: 0, };
-    for p in points {
-        point_sum.x += p.x;
-        point_sum.y += p.y;
-        total += 1;
-    }
-    if total == 0 {
-        None
+fn get_cut_point(cut_axis: &Axis, points: &mut Iterator<Item = Point2d>) -> Option<Point2d> {
+    if let Some(first_point) = points.next() {
+        let mut point_min = Point2d { x: first_point.x, y: first_point.y, };
+        let mut point_max = Point2d { x: first_point.x, y: first_point.y, };
+        let mut total_x = first_point.x as i64;
+        let mut total_y = first_point.y as i64;
+        let mut total = 1;
+        for p in points {
+            total_x += p.x as i64;
+            total_y += p.y as i64;
+            total += 1;
+            if p.x < point_min.x { point_min.x = p.x; }
+            if p.y < point_min.y { point_min.y = p.y; }
+            if p.x > point_max.x { point_max.x = p.x; }
+            if p.y > point_max.y { point_max.y = p.y; }
+        }
+        let point_mid = Point2d {
+            x: (total_x as f64 / total as f64) as i32,
+            y: (total_y as f64 / total as f64) as i32,
+        };
+        match cut_axis {
+            &Axis::X if point_mid.x == point_min.x || point_mid.x == point_max.x =>
+                None,
+            &Axis::Y if point_mid.y == point_min.y || point_mid.y == point_max.y =>
+                None,
+            _ =>
+                Some(point_mid)
+        }
     } else {
-        Some(Point2d {
-            x: (point_sum.x as f64 / total as f64) as i32,
-            y: (point_sum.y as f64 / total as f64) as i32,
-        })
+        None
     }
 }
 
@@ -348,78 +363,83 @@ fn kdv_tree_nearest() {
     assert_eq!(nearest, vec![
         NearestShape {
             dist: 61,
-            shape_fragment: &Rect2d { lt: Point2d { x: 29, y: 16 }, rb: Point2d { x: 58, y: 16 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 29, y: 16 }, rb: Point2d { x: 58, y: 16 } },
         },
         NearestShape {
             dist: 360,
-            shape_fragment: &Rect2d { lt: Point2d { x: 58, y: 16 }, rb: Point2d { x: 74, y: 16 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 58, y: 16 }, rb: Point2d { x: 74, y: 16 } },
         },
         NearestShape {
             dist: 612,
-            shape_fragment: &Rect2d { lt: Point2d { x: 19, y: 16 }, rb: Point2d { x: 29, y: 16 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 19, y: 16 }, rb: Point2d { x: 29, y: 16 } },
         },
         NearestShape {
             dist: 724,
-            shape_fragment: &Rect2d { lt: Point2d { x: 26, y: 26 }, rb: Point2d { x: 34, y: 34 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 26, y: 26 }, rb: Point2d { x: 34, y: 34 } },
         },
         NearestShape {
             dist: 820,
-            shape_fragment: &Rect2d { lt: Point2d { x: 18, y: 18 }, rb: Point2d { x: 26, y: 26 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 18, y: 18 }, rb: Point2d { x: 26, y: 26 } },
         },
         NearestShape {
             dist: 877,
-            shape_fragment: &Rect2d { lt: Point2d { x: 74, y: 16 }, rb: Point2d { x: 80, y: 16 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 74, y: 16 }, rb: Point2d { x: 80, y: 16 } },
         },
         NearestShape {
             dist: 884,
-            shape_fragment: &Rect2d { lt: Point2d { x: 34, y: 34 }, rb: Point2d { x: 42, y: 42 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 34, y: 34 }, rb: Point2d { x: 42, y: 42 } },
         },
         NearestShape {
             dist: 997,
-            shape_fragment: &Rect2d { lt: Point2d { x: 16, y: 16 }, rb: Point2d { x: 19, y: 16 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 16, y: 16 }, rb: Point2d { x: 19, y: 16 } },
+        },
+        NearestShape {
+            dist: 1010,
+            shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 16, y: 16 }, rb: Point2d { x: 18, y: 18 } },
         },
         NearestShape {
             dist: 1300,
-            shape_fragment: &Rect2d { lt: Point2d { x: 42, y: 42 }, rb: Point2d { x: 50, y: 50 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 42, y: 42 }, rb: Point2d { x: 50, y: 50 } },
         },
         NearestShape {
             dist: 1553,
-            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 23 }, rb: Point2d { x: 80, y: 44 } },
             shape: &Line2d { src: Point2d { x: 80, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 23 }, rb: Point2d { x: 80, y: 44 } },
         },
         NearestShape {
             dist: 1972,
-            shape_fragment: &Rect2d { lt: Point2d { x: 50, y: 50 }, rb: Point2d { x: 58, y: 58 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 50, y: 50 }, rb: Point2d { x: 58, y: 58 } },
         },
         NearestShape {
             dist: 2900,
-            shape_fragment: &Rect2d { lt: Point2d { x: 58, y: 58 }, rb: Point2d { x: 66, y: 66 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 58, y: 58 }, rb: Point2d { x: 66, y: 66 } },
         },
         NearestShape {
             dist: 3140,
-            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 44 }, rb: Point2d { x: 80, y: 69 } },
             shape: &Line2d { src: Point2d { x: 80, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 44 }, rb: Point2d { x: 80, y: 69 } },
         },
         NearestShape {
             dist: 4084,
-            shape_fragment: &Rect2d { lt: Point2d { x: 66, y: 66 }, rb: Point2d { x: 74, y: 74 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 66, y: 66 }, rb: Point2d { x: 74, y: 74 } },
         },
         NearestShape {
             dist: 5330,
-            shape_fragment: &Rect2d { lt: Point2d { x: 74, y: 74 }, rb: Point2d { x: 80, y: 80 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 74, y: 74 }, rb: Point2d { x: 80, y: 80 } },
         },
     ]);
     let nearest: Vec<_> = tree
@@ -434,85 +454,84 @@ fn kdv_tree_nearest() {
     assert_eq!(nearest, vec![
         NearestShape {
             dist: 884,
-            shape_fragment: &Rect2d { lt: Point2d { x: 66, y: 66 }, rb: Point2d { x: 74, y: 74 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 66, y: 66 }, rb: Point2d { x: 74, y: 74 } },
         },
         NearestShape {
             dist: 980,
-            shape_fragment: &Rect2d { lt: Point2d { x: 58, y: 58 }, rb: Point2d { x: 66, y: 66 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 58, y: 58 }, rb: Point2d { x: 66, y: 66 } },
         },
         NearestShape {
             dist: 1010,
-            shape_fragment: &Rect2d { lt: Point2d { x: 74, y: 74 }, rb: Point2d { x: 80, y: 80 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 74, y: 74 }, rb: Point2d { x: 80, y: 80 } },
         },
         NearestShape {
             dist: 1332,
-            shape_fragment: &Rect2d { lt: Point2d { x: 50, y: 50 }, rb: Point2d { x: 58, y: 58 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 50, y: 50 }, rb: Point2d { x: 58, y: 58 } },
         },
         NearestShape {
             dist: 1940,
-            shape_fragment: &Rect2d { lt: Point2d { x: 42, y: 42 }, rb: Point2d { x: 50, y: 50 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 42, y: 42 }, rb: Point2d { x: 50, y: 50 } },
         },
         NearestShape {
             dist: 2180,
-            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 44 }, rb: Point2d { x: 80, y: 69 } },
             shape: &Line2d { src: Point2d { x: 80, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 44 }, rb: Point2d { x: 80, y: 69 } },
         },
         NearestShape {
             dist: 2804,
-            shape_fragment: &Rect2d { lt: Point2d { x: 34, y: 34 }, rb: Point2d { x: 42, y: 42 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 34, y: 34 }, rb: Point2d { x: 42, y: 42 } },
         },
         NearestShape {
             dist: 3924,
-            shape_fragment: &Rect2d { lt: Point2d { x: 26, y: 26 }, rb: Point2d { x: 34, y: 34 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 26, y: 26 }, rb: Point2d { x: 34, y: 34 } },
         },
         NearestShape {
             dist: 4273,
-            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 23 }, rb: Point2d { x: 80, y: 44 } },
             shape: &Line2d { src: Point2d { x: 80, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 23 }, rb: Point2d { x: 80, y: 44 } },
         },
         NearestShape {
             dist: 5300,
-            shape_fragment: &Rect2d { lt: Point2d { x: 18, y: 18 }, rb: Point2d { x: 26, y: 26 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 18, y: 18 }, rb: Point2d { x: 26, y: 26 } },
         },
         NearestShape {
             dist: 5501,
-            shape_fragment: &Rect2d { lt: Point2d { x: 29, y: 16 }, rb: Point2d { x: 58, y: 16 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 29, y: 16 }, rb: Point2d { x: 58, y: 16 } },
         },
         NearestShape {
             dist: 5800,
-            shape_fragment: &Rect2d { lt: Point2d { x: 58, y: 16 }, rb: Point2d { x: 74, y: 16 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 58, y: 16 }, rb: Point2d { x: 74, y: 16 } },
         },
         NearestShape {
             dist: 6052,
-            shape_fragment: &Rect2d { lt: Point2d { x: 19, y: 16 }, rb: Point2d { x: 29, y: 16 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 19, y: 16 }, rb: Point2d { x: 29, y: 16 } },
         },
         NearestShape {
             dist: 6290,
-            shape_fragment: &Rect2d { lt: Point2d { x: 16, y: 16 }, rb: Point2d { x: 18, y: 18 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 16, y: 16 }, rb: Point2d { x: 18, y: 18 } },
         },
         NearestShape {
             dist: 6317,
-            shape_fragment: &Rect2d { lt: Point2d { x: 74, y: 16 }, rb: Point2d { x: 80, y: 16 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 74, y: 16 }, rb: Point2d { x: 80, y: 16 } },
         },
         NearestShape {
             dist: 6437,
+            shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
             shape_fragment: &Rect2d { lt: Point2d { x: 16, y: 16 }, rb: Point2d { x: 19, y: 16 } },
-            shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 },
-            },
-        }
+        },
     ]);
     let nearest: Vec<_> = tree
         .nearest(
@@ -526,116 +545,144 @@ fn kdv_tree_nearest() {
     assert_eq!(nearest, vec![
         NearestShape {
             dist: 4660,
-            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 44 }, rb: Point2d { x: 80, y: 69 } },
             shape: &Line2d { src: Point2d { x: 80, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 44 }, rb: Point2d { x: 80, y: 69 } },
         },
         NearestShape {
             dist: 4913,
-            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 23 }, rb: Point2d { x: 80, y: 44 } },
             shape: &Line2d { src: Point2d { x: 80, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 23 }, rb: Point2d { x: 80, y: 44 } },
         },
         NearestShape {
             dist: 5065,
-            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 69 }, rb: Point2d { x: 80, y: 74 } },
             shape: &Line2d { src: Point2d { x: 80, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 69 }, rb: Point2d { x: 80, y: 74 } },
         },
         NearestShape {
             dist: 5353,
-            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 74 }, rb: Point2d { x: 80, y: 80 } },
             shape: &Line2d { src: Point2d { x: 80, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 74 }, rb: Point2d { x: 80, y: 80 } },
         },
         NearestShape {
             dist: 5585,
-            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 16 }, rb: Point2d { x: 80, y: 23 } },
             shape: &Line2d { src: Point2d { x: 80, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 80, y: 16 }, rb: Point2d { x: 80, y: 23 } },
         },
         NearestShape {
             dist: 5770,
-            shape_fragment: &Rect2d { lt: Point2d { x: 74, y: 74 }, rb: Point2d { x: 80, y: 80 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 74, y: 74 }, rb: Point2d { x: 80, y: 80 } },
         },
         NearestShape {
             dist: 6197,
-            shape_fragment: &Rect2d { lt: Point2d { x: 74, y: 16 }, rb: Point2d { x: 80, y: 16 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 74, y: 16 }, rb: Point2d { x: 80, y: 16 } },
         },
         NearestShape {
             dist: 6484,
-            shape_fragment: &Rect2d { lt: Point2d { x: 66, y: 66 }, rb: Point2d { x: 74, y: 74 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 66, y: 66 }, rb: Point2d { x: 74, y: 74 } },
         },
         NearestShape {
             dist: 7540,
-            shape_fragment: &Rect2d { lt: Point2d { x: 58, y: 58 }, rb: Point2d { x: 66, y: 66 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 58, y: 58 }, rb: Point2d { x: 66, y: 66 } },
         },
         NearestShape {
             dist: 7880,
-            shape_fragment: &Rect2d { lt: Point2d { x: 58, y: 16 }, rb: Point2d { x: 74, y: 16 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 58, y: 16 }, rb: Point2d { x: 74, y: 16 } },
         },
         NearestShape {
             dist: 8852,
-            shape_fragment: &Rect2d { lt: Point2d { x: 50, y: 50 }, rb: Point2d { x: 58, y: 58 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 50, y: 50 }, rb: Point2d { x: 58, y: 58 } },
         },
         NearestShape {
             dist: 10420,
-            shape_fragment: &Rect2d { lt: Point2d { x: 42, y: 42 }, rb: Point2d { x: 50, y: 50 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 42, y: 42 }, rb: Point2d { x: 50, y: 50 } },
         },
         NearestShape {
             dist: 12181,
-            shape_fragment: &Rect2d { lt: Point2d { x: 29, y: 16 }, rb: Point2d { x: 58, y: 16 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 29, y: 16 }, rb: Point2d { x: 58, y: 16 } },
         },
         NearestShape {
             dist: 12244,
-            shape_fragment: &Rect2d { lt: Point2d { x: 34, y: 34 }, rb: Point2d { x: 42, y: 42 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 34, y: 34 }, rb: Point2d { x: 42, y: 42 } },
         },
         NearestShape {
             dist: 14324,
-            shape_fragment: &Rect2d { lt: Point2d { x: 26, y: 26 }, rb: Point2d { x: 34, y: 34 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 26, y: 26 }, rb: Point2d { x: 34, y: 34 } },
         },
         NearestShape {
             dist: 16532,
-            shape_fragment: &Rect2d { lt: Point2d { x: 19, y: 16 }, rb: Point2d { x: 29, y: 16 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 19, y: 16 }, rb: Point2d { x: 29, y: 16 } },
         },
         NearestShape {
             dist: 16660,
-            shape_fragment: &Rect2d { lt: Point2d { x: 18, y: 18 }, rb: Point2d { x: 26, y: 26 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 18, y: 18 }, rb: Point2d { x: 26, y: 26 } },
         },
         NearestShape {
             dist: 18250,
-            shape_fragment: &Rect2d { lt: Point2d { x: 16, y: 16 }, rb: Point2d { x: 18, y: 18 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 16, y: 16 }, rb: Point2d { x: 18, y: 18 } },
         },
         NearestShape {
             dist: 18317,
-            shape_fragment: &Rect2d { lt: Point2d { x: 16, y: 16 }, rb: Point2d { x: 19, y: 16 } },
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
+            shape_fragment: &Rect2d { lt: Point2d { x: 16, y: 16 }, rb: Point2d { x: 19, y: 16 } },
         },
     ]);
 }
 
 #[test]
 fn kdv_tree_nearest_big_o() {
-    let mut rng = rand::thread_rng();
-    let mut random_line = || {
+    fn random_line<R>(rng: &mut R) -> Line2d where R: Rng  {
         let src = Point2d { x: rng.gen_range(-1000000, 1000000), y: rng.gen_range(-1000000, 1000000), };
         let dst = Point2d { x: src.x + rng.gen_range(-100000, 100000), y: src.y + rng.gen_range(-100000, 100000), };
         Line2d { src, dst }
     };
-    let tree1k = KdvTree::build(
-        vec![Axis::X, Axis::Y],
-        (0 .. 1000).map(|_| random_line()),
-        cmp_points,
-        get_bounding_volume,
-        get_cut_point,
-        Cutter { cut_limit: 1000, }
-    ).unwrap();
+    fn avg_dist_count(shapes_count: usize, avg_count: usize) -> usize {
+        let tree = KdvTree::build(
+            vec![Axis::X, Axis::Y],
+            (0 .. shapes_count).map(|_| random_line(&mut rand::thread_rng())),
+            cmp_points,
+            get_bounding_volume,
+            get_cut_point,
+            Cutter { cut_limit: 1000, }
+        ).unwrap();
+        let mut total = 0;
+        for _ in 0 .. avg_count {
+            let mut dist_cp_counter = 0;
+            let mut dist_bv_counter = 0;
+            tree.nearest(
+                &random_line(&mut rand::thread_rng()),
+                cmp_points,
+                get_bounding_volume,
+                |axis: &_, bounding_volume: &_, cut_point: &_| {
+                    dist_cp_counter += 1;
+                    bv_to_cut_point_sq_dist(axis, bounding_volume, cut_point)
+                },
+                |bv_a: &_, bv_b: &_| {
+                    dist_bv_counter += 1;
+                    bv_to_bv_sq_dist(bv_a, bv_b)
+                },
+            ).next().unwrap();
+            total += dist_cp_counter + dist_bv_counter;
+        }
+        total / avg_count
+    }
+
+    let dist_count_100 = avg_dist_count(100, 5);
+    let dist_count_1k = avg_dist_count(1000, 5);
+    assert!(dist_count_1k < dist_count_100 * 9);
+    let dist_count_10k = avg_dist_count(10000, 5);
+    assert!(dist_count_10k < dist_count_1k * 9);
+    assert!(dist_count_10k < dist_count_100 * 90);
 }

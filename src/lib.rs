@@ -1,5 +1,4 @@
-#[cfg(test)]
-extern crate rand;
+#[cfg(test)] extern crate rand;
 
 use std::cmp::Ordering;
 use std::iter::{self, FromIterator};

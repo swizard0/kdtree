@@ -289,31 +289,35 @@ impl<A, P, B, S> KdvTree<A, P, B, S>
         }
     }
 
-    pub fn nearest<'t, SN, BN, D, CMF, BVF, DPF, DVF>(
+    pub fn nearest<'t, 's, SN, BN, D, CMF, BVF, CBF, DPF, DVF>(
         &'t self,
-        shape: &SN,
+        shape: &'s SN,
         cmp_p: CMF,
         get_bv: BVF,
+        cut_bv: CBF,
         dist_cp: DPF,
         dist_bv: DVF,
     )
-        -> NearestIter<'t, A, P, S, B, BN, D, CMF, DPF, DVF>
+        -> NearestIter<'t, 's, A, P, S, B, SN, BN, D, CMF, CBF, DPF, DVF>
         where CMF: CmpPoints<A, P>,
               BVF: GetBoundingVolume<BN, SN>,
+              CBF: BoundingVolumesCutter<A, P, BN, SN>,
               DPF: DistanceBVCP<A, P, BN, Dist = D>,
               DVF: DistanceBVBV<B, BN, Dist = D>,
               D: PartialEq + PartialOrd,
     {
         NearestIter {
-            needle_bv: get_bv.bounding_volume(shape),
+            shape,
             axis: &self.axis,
             shapes: &self.shapes,
             nodes_queue: BinaryHeap::from_iter(iter::once(NearestNode {
                 dist: None,
                 node: &self.root,
+                needle_bv: get_bv.bounding_volume(shape),
             })),
             neighbours: BinaryHeap::new(),
             cmp_p,
+            cut_bv,
             dist_cp,
             dist_bv,
         }
@@ -536,9 +540,10 @@ impl<'t, 's, A, P, SS, BS, SN, BN, CMF, CPF, CBF> Iterator for IntersectIter<'t,
     }
 }
 
-struct NearestNode<'t, P: 't, B: 't, D> where D: PartialEq + PartialOrd {
+struct NearestNode<'t, P: 't, B: 't, BN, D> where D: PartialEq + PartialOrd {
     dist: Option<D>,
-    node: &'t KdvNode<P, B>
+    node: &'t KdvNode<P, B>,
+    needle_bv: BN,
 }
 
 #[derive(Clone, Debug)]
@@ -548,26 +553,28 @@ pub struct NearestShape<'t, B: 't, S: 't, D> {
     pub shape_fragment: &'t B,
 }
 
-pub struct NearestIter<'t, A: 't, P: 't, S: 't, B: 't, BN, D, CMF, DPF, DVF> where D: PartialEq + PartialOrd {
-    needle_bv: BN,
+pub struct NearestIter<'t, 's, A: 't, P: 't, S: 't, B: 't, SN: 's, BN, D, CMF, CBF, DPF, DVF> where D: PartialEq + PartialOrd {
+    shape: &'s SN,
     axis: &'t [A],
     shapes: &'t [S],
-    nodes_queue: BinaryHeap<NearestNode<'t, P, B, D>>,
+    nodes_queue: BinaryHeap<NearestNode<'t, P, B, BN, D>>,
     neighbours: BinaryHeap<NearestShape<'t, B, S, D>>,
     cmp_p: CMF,
+    cut_bv: CBF,
     dist_cp: DPF,
     dist_bv: DVF,
 }
 
-impl<'t, A, P, S, B, BN, D, CMF, DPF, DVF> Iterator for NearestIter<'t, A, P, S, B, BN, D, CMF, DPF, DVF>
+impl<'t, 's, A, P, S, B, SN, BN, D, CMF, CBF, DPF, DVF> Iterator for NearestIter<'t, 's, A, P, S, B, SN, BN, D, CMF, CBF, DPF, DVF>
     where B: BoundingVolume<P>,
-          BN: BoundingVolume<P>,
+          BN: BoundingVolume<P> + Clone,
           D: PartialEq + PartialOrd,
           CMF: CmpPoints<A, P>,
+          CBF: BoundingVolumesCutter<A, P, BN, SN>,
           DPF: DistanceBVCP<A, P, BN, Dist = D>,
           DVF: DistanceBVBV<B, BN, Dist = D>,
 {
-    type Item = NearestShape<'t, B, S, D>;
+    type Item = Result<NearestShape<'t, B, S, D>, CBF::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -594,13 +601,13 @@ impl<'t, A, P, S, B, BN, D, CMF, DPF, DVF> Iterator for NearestIter<'t, A, P, S,
                 };
             match direction {
                 Ok(nearest_shape) =>
-                    return Some(nearest_shape),
+                    return Some(Ok(nearest_shape)),
                 Err(nearest_node) => {
                     let shapes = self.shapes;
                     let dist_cp = &mut self.dist_cp;
                     let dist_bv = &mut self.dist_bv;
                     {
-                        let needle_bv = &self.needle_bv;
+                        let needle_bv = &nearest_node.needle_bv;
                         self.neighbours.extend(
                             nearest_node.node.shapes.iter()
                                 .map(|fragment| NearestShape {
@@ -610,73 +617,77 @@ impl<'t, A, P, S, B, BN, D, CMF, DPF, DVF> Iterator for NearestIter<'t, A, P, S,
                                 })
                         );
                     }
-
-                    let mut cut_bv = |_shape: &(), _fragment: &_, _cut_axis: &_, _cut_point: &_| Ok(None);
-
-                    struct NeedleBv<'a, B: 'a>(&'a B);
-                    impl<'a, B, P> BoundingVolume<P> for NeedleBv<'a, B> where B: BoundingVolume<P> {
-                        fn min_corner(&self) -> P { self.0.min_corner() }
-                        fn max_corner(&self) -> P { self.0.max_corner() }
-                    }
-
                     match nearest_node.node.children {
                         KdvNodeChildren::Missing =>
                             (),
                         KdvNodeChildren::OnlyLeft { ref cut_point, ref child, } => {
                             let cut_axis = &self.axis[cut_point.axis_index];
-                            match shape_owner(&(), NeedleBv(&self.needle_bv), cut_axis, &cut_point.point, &self.cmp_p, &mut cut_bv) {
-                                Ok(ShapeOwner::Me(NeedleBv(..))) =>
-                                    self.nodes_queue.push(NearestNode { dist: None, node: child, }),
-                                Ok(ShapeOwner::Left(NeedleBv(..))) =>
-                                    self.nodes_queue.push(NearestNode { dist: None, node: child, }),
-                                Ok(ShapeOwner::Right(NeedleBv(..))) =>
+                            match shape_owner(self.shape, nearest_node.needle_bv, cut_axis, &cut_point.point, &self.cmp_p, &mut self.cut_bv) {
+                                Ok(ShapeOwner::Me(needle_fragment)) =>
+                                    self.nodes_queue.push(NearestNode { dist: None, node: child, needle_bv: needle_fragment, }),
+                                Ok(ShapeOwner::Left(needle_fragment)) =>
+                                    self.nodes_queue.push(NearestNode { dist: None, node: child, needle_bv: needle_fragment, }),
+                                Ok(ShapeOwner::Right(..)) =>
                                     (),
-                                Ok(ShapeOwner::Both { .. }) =>
-                                    unreachable!(),
-                                Err(()) =>
-                                    unreachable!(),
+                                Ok(ShapeOwner::Both { left_bvol: needle_fragment, .. }) =>
+                                    self.nodes_queue.push(NearestNode { dist: None, node: child, needle_bv: needle_fragment, }),
+                                Err(error) => {
+                                    self.neighbours.clear();
+                                    self.nodes_queue.clear();
+                                    return Some(Err(error));
+                                },
                             }
                         },
                         KdvNodeChildren::OnlyRight { ref cut_point, ref child, } => {
                             let cut_axis = &self.axis[cut_point.axis_index];
-                            match shape_owner(&(), NeedleBv(&self.needle_bv), cut_axis, &cut_point.point, &self.cmp_p, &mut cut_bv) {
-                                Ok(ShapeOwner::Me(NeedleBv(..))) =>
-                                    self.nodes_queue.push(NearestNode { dist: None, node: child, }),
-                                Ok(ShapeOwner::Left(NeedleBv(..))) =>
+                            match shape_owner(self.shape, nearest_node.needle_bv, cut_axis, &cut_point.point, &self.cmp_p, &mut self.cut_bv) {
+                                Ok(ShapeOwner::Me(needle_fragment)) =>
+                                    self.nodes_queue.push(NearestNode { dist: None, node: child, needle_bv: needle_fragment, }),
+                                Ok(ShapeOwner::Left(..)) =>
                                     (),
-                                Ok(ShapeOwner::Right(NeedleBv(..))) =>
-                                    self.nodes_queue.push(NearestNode { dist: None, node: child, }),
-                                Ok(ShapeOwner::Both { .. }) =>
-                                    unreachable!(),
-                                Err(()) =>
-                                    unreachable!(),
+                                Ok(ShapeOwner::Right(needle_fragment)) =>
+                                    self.nodes_queue.push(NearestNode { dist: None, node: child, needle_bv: needle_fragment, }),
+                                Ok(ShapeOwner::Both { right_bvol: needle_fragment, .. }) =>
+                                    self.nodes_queue.push(NearestNode { dist: None, node: child, needle_bv: needle_fragment, }),
+                                Err(error) => {
+                                    self.neighbours.clear();
+                                    self.nodes_queue.clear();
+                                    return Some(Err(error));
+                                },
                             }
                         },
                         KdvNodeChildren::Both { ref cut_point, ref left, ref right, } => {
                             let cut_axis = &self.axis[cut_point.axis_index];
-                            match shape_owner(&(), NeedleBv(&self.needle_bv), cut_axis, &cut_point.point, &self.cmp_p, &mut cut_bv) {
-                                Ok(ShapeOwner::Me(NeedleBv(..))) => {
-                                    self.nodes_queue.push(NearestNode { dist: None, node: left, });
-                                    self.nodes_queue.push(NearestNode { dist: None, node: right, });
+                            match shape_owner(self.shape, nearest_node.needle_bv, cut_axis, &cut_point.point, &self.cmp_p, &mut self.cut_bv) {
+                                Ok(ShapeOwner::Me(needle_fragment)) => {
+                                    self.nodes_queue.push(NearestNode { dist: None, node: left, needle_bv: needle_fragment.clone(), });
+                                    self.nodes_queue.push(NearestNode { dist: None, node: right, needle_bv: needle_fragment, });
                                 },
-                                Ok(ShapeOwner::Left(NeedleBv(..))) => {
-                                    self.nodes_queue.push(NearestNode { dist: None, node: left, });
+                                Ok(ShapeOwner::Left(needle_fragment)) => {
+                                    self.nodes_queue.push(NearestNode { dist: None, node: left, needle_bv: needle_fragment.clone(), });
                                     self.nodes_queue.push(NearestNode {
-                                        dist: Some(dist_cp.bv_to_cut_point_distance(cut_axis, &self.needle_bv, &cut_point.point)),
+                                        dist: Some(dist_cp.bv_to_cut_point_distance(cut_axis, &needle_fragment, &cut_point.point)),
                                         node: right,
+                                        needle_bv: needle_fragment,
                                     });
                                 },
-                                Ok(ShapeOwner::Right(NeedleBv(..))) => {
+                                Ok(ShapeOwner::Right(needle_fragment)) => {
                                     self.nodes_queue.push(NearestNode {
-                                        dist: Some(dist_cp.bv_to_cut_point_distance(cut_axis, &self.needle_bv, &cut_point.point)),
+                                        dist: Some(dist_cp.bv_to_cut_point_distance(cut_axis, &needle_fragment, &cut_point.point)),
                                         node: left,
+                                        needle_bv: needle_fragment.clone(),
                                     });
-                                    self.nodes_queue.push(NearestNode { dist: None, node: right, });
+                                    self.nodes_queue.push(NearestNode { dist: None, node: right, needle_bv: needle_fragment, });
                                 },
-                                Ok(ShapeOwner::Both { .. }) =>
-                                    unreachable!(),
-                                Err(()) =>
-                                    unreachable!(),
+                                Ok(ShapeOwner::Both { left_bvol, right_bvol, }) => {
+                                    self.nodes_queue.push(NearestNode { dist: None, node: left, needle_bv: left_bvol, });
+                                    self.nodes_queue.push(NearestNode { dist: None, node: right, needle_bv: right_bvol, });
+                                },
+                                Err(error) => {
+                                    self.neighbours.clear();
+                                    self.nodes_queue.clear();
+                                    return Some(Err(error));
+                                },
                             }
                         },
                     }
@@ -686,8 +697,8 @@ impl<'t, A, P, S, B, BN, D, CMF, DPF, DVF> Iterator for NearestIter<'t, A, P, S,
     }
 }
 
-impl<'t, P, B, D> Ord for NearestNode<'t, P, B, D> where D: PartialOrd {
-    fn cmp(&self, other: &NearestNode<'t, P, B, D>) -> Ordering {
+impl<'t, P, B, BN, D> Ord for NearestNode<'t, P, B, BN, D> where D: PartialOrd {
+    fn cmp(&self, other: &NearestNode<'t, P, B, BN, D>) -> Ordering {
         match (&self.dist, &other.dist) {
             (&None, &None) =>
                 Ordering::Equal,
@@ -707,16 +718,16 @@ impl<'t, P, B, D> Ord for NearestNode<'t, P, B, D> where D: PartialOrd {
     }
 }
 
-impl<'t, P, B, D> PartialOrd for NearestNode<'t, P, B, D> where D: PartialOrd {
-    fn partial_cmp(&self, other: &NearestNode<'t, P, B, D>) -> Option<Ordering> {
+impl<'t, P, B, BN, D> PartialOrd for NearestNode<'t, P, B, BN, D> where D: PartialOrd {
+    fn partial_cmp(&self, other: &NearestNode<'t, P, B, BN, D>) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<'t, P, B, D> Eq for NearestNode<'t, P, B, D> where D: PartialEq + PartialOrd { }
+impl<'t, P, B, BN, D> Eq for NearestNode<'t, P, B, BN, D> where D: PartialEq + PartialOrd { }
 
-impl<'t, P, B, D> PartialEq for NearestNode<'t, P, B, D> where D: PartialEq + PartialOrd {
-    fn eq(&self, other: &NearestNode<'t, P, B, D>) -> bool {
+impl<'t, P, B, BN, D> PartialEq for NearestNode<'t, P, B, BN, D> where D: PartialEq + PartialOrd {
+    fn eq(&self, other: &NearestNode<'t, P, B, BN, D>) -> bool {
         self.dist == other.dist
     }
 }

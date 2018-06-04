@@ -357,16 +357,17 @@ fn kdv_tree_nearest() {
     ];
     let tree = KdvTree::build(vec![Axis::X, Axis::Y], shapes, cmp_points, get_bounding_volume, get_cut_point, Cutter { cut_limit: 10, }).unwrap();
 
-    let nearest: Vec<_> = tree
+    let nearest: Result<Vec<_>, _> = tree
         .nearest(
             &Line2d { src: Point2d { x: 44, y: 8, }, dst: Point2d { x: 52, y: 12, }, },
             cmp_points,
             get_bounding_volume,
+            Cutter { cut_limit: 10, },
             bv_to_cut_point_sq_dist,
             bv_to_bv_sq_dist,
         )
         .collect();
-    assert_eq!(nearest, vec![
+    assert_eq!(nearest, Ok(vec![
         NearestShape {
             dist: 61,
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
@@ -447,17 +448,18 @@ fn kdv_tree_nearest() {
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
             shape_fragment: &Rect2d { lt: Point2d { x: 74, y: 74 }, rb: Point2d { x: 80, y: 80 } },
         },
-    ]);
-    let nearest: Vec<_> = tree
+    ]));
+    let nearest: Result<Vec<_>, _> = tree
         .nearest(
             &Line2d { src: Point2d { x: 44, y: 88, }, dst: Point2d { x: 52, y: 92, }, },
             cmp_points,
             get_bounding_volume,
+            Cutter { cut_limit: 10, },
             bv_to_cut_point_sq_dist,
             bv_to_bv_sq_dist,
         )
         .collect();
-    assert_eq!(nearest, vec![
+    assert_eq!(nearest, Ok(vec![
         NearestShape {
             dist: 884,
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 80 } },
@@ -538,17 +540,18 @@ fn kdv_tree_nearest() {
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
             shape_fragment: &Rect2d { lt: Point2d { x: 16, y: 16 }, rb: Point2d { x: 19, y: 16 } },
         },
-    ]);
-    let nearest: Vec<_> = tree
+    ]));
+    let nearest: Result<Vec<_>, _> = tree
         .nearest(
             &Line2d { src: Point2d { x: 144, y: 48, }, dst: Point2d { x: 152, y: 52, }, },
             cmp_points,
             get_bounding_volume,
+            Cutter { cut_limit: 10, },
             bv_to_cut_point_sq_dist,
             bv_to_bv_sq_dist,
         )
         .collect();
-    assert_eq!(nearest, vec![
+    assert_eq!(nearest, Ok(vec![
         NearestShape {
             dist: 4660,
             shape: &Line2d { src: Point2d { x: 80, y: 16 }, dst: Point2d { x: 80, y: 80 } },
@@ -644,7 +647,7 @@ fn kdv_tree_nearest() {
             shape: &Line2d { src: Point2d { x: 16, y: 16 }, dst: Point2d { x: 80, y: 16 } },
             shape_fragment: &Rect2d { lt: Point2d { x: 16, y: 16 }, rb: Point2d { x: 19, y: 16 } },
         },
-    ]);
+    ]));
 }
 
 #[test]
@@ -667,9 +670,10 @@ fn kdv_tree_nearest_check() {
         &sample,
         cmp_points,
         get_bounding_volume,
+        Cutter { cut_limit: 1000, },
         bv_to_cut_point_sq_dist,
         bv_to_bv_sq_dist,
-    ).next().unwrap();
+    ).next().unwrap().unwrap();
 
     let nearest_b = tree.iter()
         .flat_map(move |node| node.shapes())
@@ -701,6 +705,7 @@ fn kdv_tree_nearest_big_o() {
                 &random_line(&mut rand::thread_rng()),
                 cmp_points,
                 get_bounding_volume,
+                Cutter { cut_limit: 1000, },
                 |axis: &_, bounding_volume: &_, cut_point: &_| {
                     dist_cp_counter += 1;
                     bv_to_cut_point_sq_dist(axis, bounding_volume, cut_point)
@@ -709,7 +714,7 @@ fn kdv_tree_nearest_big_o() {
                     dist_bv_counter += 1;
                     bv_to_bv_sq_dist(bv_a, bv_b)
                 },
-            ).next().unwrap();
+            ).next().unwrap().unwrap();
             total += dist_cp_counter + dist_bv_counter;
         }
         let avg_total = total / avg_count;
@@ -725,7 +730,9 @@ fn kdv_tree_nearest_big_o() {
     let stats_100 = avg_dist_count(100, 5);
     assert!(stats_100.0 * 10 < stats_100.2);
     let stats_1k = avg_dist_count(1000, 5);
-    assert!(stats_1k.0 * 100 < stats_1k.2);
+    assert!(stats_1k.0 * 1000 < stats_1k.2);
+    assert!(stats_1k.0 < stats_100.0 * 10);
     let stats_10k = avg_dist_count(10000, 5);
-    assert!(stats_10k.0 * 1000 < stats_10k.2);
+    assert!(stats_10k.0 * 10000 < stats_10k.2);
+    assert!(stats_10k.0 < stats_1k.0 * 10);
 }
